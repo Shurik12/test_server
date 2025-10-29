@@ -1,19 +1,100 @@
 cmake_minimum_required(VERSION 3.20)
+project(CppService VERSION 1.0.0 LANGUAGES CXX)
 
-project(database VERSION 0.1 DESCRIPTION "Poco echo TCPServer")
+# Enable testing
+include(CTest)
+enable_testing()
+option(BUILD_TESTING "Build tests" ON)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -std=c++17")
+if(CMAKE_GENERATOR STREQUAL "Ninja")
+    message(STATUS "Using Ninja generator")
+endif()
 
-add_subdirectory(src)
-add_subdirectory(base)
-add_subdirectory(contrib EXCLUDE_FROM_ALL)
+find_package(yaml-cpp REQUIRED)
+find_package(spdlog REQUIRED)
+find_package(fmt REQUIRED)
 
-add_executable(server src/Server/server.cpp)
-target_link_libraries(server db)
-target_include_directories(server PUBLIC src base contrib)
+set(SRC_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/common
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/logging
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/server
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client
+)
+set(src_headers)
+set(src_sources)
+foreach(DIR ${SRC_DIRS})
+    file(GLOB HEADERS "${DIR}/*.h" "${DIR}/*.hpp")
+    file(GLOB SOURCES "${DIR}/*.cpp")
+    list(APPEND src_headers ${HEADERS})
+    list(APPEND src_sources ${SOURCES})
+endforeach()
+add_executable(server main.cpp)
+target_sources(server PRIVATE ${src_sources})
+target_include_directories(server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(server PRIVATE
+    spdlog::spdlog
+    fmt::fmt
+)
 
-add_executable(client src/Client/client.cpp)
-target_link_libraries(client db)
-target_include_directories(client PUBLIC src base contrib)
+# Client executable
+add_executable(client client.cpp)
+target_sources(client PRIVATE ${src_sources})
+target_include_directories(client PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(client PRIVATE
+    spdlog::spdlog
+    fmt::fmt
+)
+
+if(BUILD_TESTING)
+    find_package(GTest REQUIRED)
+    
+    # Unified test executable
+    add_executable(tests
+        tests/test_main.cpp
+        tests/service_tests.cpp
+        tests/load_integration_tests.cpp
+        ${src_sources}
+    )
+    
+    target_include_directories(tests PRIVATE 
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests
+    )
+    
+    target_link_libraries(tests PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+        spdlog::spdlog
+        fmt::fmt
+        pthread
+    )
+    
+    target_compile_options(tests PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -O2
+    )
+    
+    # Add test targets with labels
+    add_test(NAME UnitTests COMMAND tests --gtest_filter="RequestHandlerTest*")
+    add_test(NAME PerformanceTests COMMAND tests --gtest_filter="*PerformanceTest*")
+    add_test(NAME IntegrationTests COMMAND tests --gtest_filter="LoadIntegrationTest*")
+    
+    # Set test properties
+    set_tests_properties(UnitTests PROPERTIES LABELS "unit")
+    set_tests_properties(PerformanceTests PROPERTIES LABELS "performance") 
+    set_tests_properties(IntegrationTests PROPERTIES LABELS "integration")
+endif()
+
+target_compile_options(server PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+    -O2
+    -Wno-array-bounds
+)
