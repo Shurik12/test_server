@@ -1,0 +1,22 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  timeouts:
+    read: 30
+    write: 30
+  thread_pool_size: 0  # 0 = use hardware concurrency
+
+logging:
+  level: "debug"  # trace, debug, info, warn, error, critical
+  file: "logs/service.log"
+  pattern: "[%Y-%m-%d %H:%M:%S.%e] [%l] [thread %t] %v"
+  flush_on: "debug"  # Level at which to automatically flush
+
+client:
+  timeouts:
+    connection: 10
+    read: 30
+
+application:
+  name: "C++ JSON Processing Service"
+  version: "1.0.0"

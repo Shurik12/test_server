@@ -1,5 +1,5 @@
 # Project name
-PROJECT_NAME = CppService
+PROJECT_NAME = server
 
 # Directories
 BUILD_DIR = build

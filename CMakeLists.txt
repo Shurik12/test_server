@@ -19,10 +19,11 @@ find_package(spdlog REQUIRED)
 find_package(fmt REQUIRED)
 
 set(SRC_DIRS
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/client
     ${CMAKE_CURRENT_SOURCE_DIR}/src/common
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/config
     ${CMAKE_CURRENT_SOURCE_DIR}/src/logging
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/client
 )
 set(src_headers)
 set(src_sources)
@@ -32,7 +33,7 @@ foreach(DIR ${SRC_DIRS})
     list(APPEND src_headers ${HEADERS})
     list(APPEND src_sources ${SOURCES})
 endforeach()
-add_executable(server main.cpp)
+add_executable(server server.cpp)
 target_sources(server PRIVATE ${src_sources})
 target_include_directories(server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(server PRIVATE

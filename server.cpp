@@ -1,22 +1,18 @@
 #include <iostream>
 #include <string>
 
+#include <config/Config.h>
 #include <server/Server.h>
 
 int main(int argc, char *argv[])
 {
-    // Parse command line arguments
-    std::string host = "0.0.0.0";
-    int port = 8080;
+    // Load configuration
+    Config::loadFromFile("config.yaml");
+    Config::loadFromArgs(argc, argv);
 
-    if (argc >= 2)
-    {
-        host = argv[1];
-    }
-    if (argc >= 3)
-    {
-        port = std::stoi(argv[2]);
-    }
+    // Get server configuration with defaults
+    std::string host = Config::getString("server.host", "0.0.0.0");
+    int port = Config::getInt("server.port", 8080);
 
     std::cout << "C++ JSON Processing Service" << std::endl;
     std::cout << "===========================" << std::endl;
