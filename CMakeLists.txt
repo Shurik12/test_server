@@ -51,7 +51,7 @@ target_link_libraries(client PRIVATE
 
 if(BUILD_TESTING)
     find_package(GTest REQUIRED)
-    
+
     # Unified test executable
     add_executable(tests
         tests/test_main.cpp
@@ -59,12 +59,12 @@ if(BUILD_TESTING)
         tests/load_integration_tests.cpp
         ${src_sources}
     )
-    
-    target_include_directories(tests PRIVATE 
+
+    target_include_directories(tests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
         ${CMAKE_CURRENT_SOURCE_DIR}/tests
     )
-    
+
     target_link_libraries(tests PRIVATE
         GTest::gtest
         GTest::gtest_main
@@ -72,22 +72,24 @@ if(BUILD_TESTING)
         fmt::fmt
         pthread
     )
-    
+
     target_compile_options(tests PRIVATE
         -Wall
         -Wextra
         -Wpedantic
         -O2
+        -Wno-array-bounds
+        -Wno-stringop-overflow
     )
-    
+
     # Add test targets with labels
     add_test(NAME UnitTests COMMAND tests --gtest_filter="RequestHandlerTest*")
     add_test(NAME PerformanceTests COMMAND tests --gtest_filter="*PerformanceTest*")
     add_test(NAME IntegrationTests COMMAND tests --gtest_filter="LoadIntegrationTest*")
-    
+
     # Set test properties
     set_tests_properties(UnitTests PROPERTIES LABELS "unit")
-    set_tests_properties(PerformanceTests PROPERTIES LABELS "performance") 
+    set_tests_properties(PerformanceTests PROPERTIES LABELS "performance")
     set_tests_properties(IntegrationTests PROPERTIES LABELS "integration")
 endif()
 
@@ -97,4 +99,14 @@ target_compile_options(server PRIVATE
     -Wpedantic
     -O2
     -Wno-array-bounds
+    -Wno-stringop-overflow
+)
+
+target_compile_options(client PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+    -O2
+    -Wno-array-bounds
+    -Wno-stringop-overflow
 )
