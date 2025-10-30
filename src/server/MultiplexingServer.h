@@ -49,8 +49,8 @@ private:
 	void handleClientData(int client_fd);
 	void closeClient(int client_fd);
 	void processRequest(int client_fd, const std::string &request);
-	std::string createHttpResponse(const std::string &content);
-
+	std::string createHttpResponse(const std::string &content,
+								   const std::string &content_type = "application/json");
 	// HTTP request parsing
 	bool parseHttpRequest(const std::string &data, std::string &method,
 						  std::string &path, std::string &body);

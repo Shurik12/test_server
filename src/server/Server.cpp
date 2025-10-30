@@ -4,6 +4,7 @@
 #include <utility>
 
 #include <logging/Logger.h>
+#include <server/Metrics.h>
 #include <server/Server.h>
 
 // Initialize static member
@@ -230,7 +231,8 @@ void Server::setupRoutes()
 	server_->Get("/metrics", [](const httplib::Request &, httplib::Response &res)
 				 {
         Logger::debug("Metrics request");
-        res.set_content(R"({"active_connections": 0, "requests_processed": 0, "success": true})", "application/json"); });
+        auto& metrics = Metrics::getInstance();
+        res.set_content(metrics.getPrometheusMetrics(), "text/plain"); });
 
 	// Root endpoint - API documentation
 	server_->Get("/", [](const httplib::Request &, httplib::Response &res)
@@ -242,61 +244,114 @@ void Server::setupRoutes()
             "endpoints": {
                 "GET /": "API documentation",
                 "GET /health": "Service health check",
-                "GET /metrics": "Service metrics", 
+                "GET /metrics": "Prometheus metrics", 
                 "POST /process": "Process JSON request synchronously",
                 "POST /process-async": "Process JSON request asynchronously"
             }
         })", "application/json"); });
 
-	// Synchronous processing endpoint
+	// Synchronous processing endpoint - UPDATED with metrics
 	server_->Post("/process", [this](const httplib::Request &req, httplib::Response &res)
 				  {    
+        auto& metrics = Metrics::getInstance();
+        metrics.incrementRequests();
+        metrics.incrementBytesReceived(req.body.size());
+        
+        auto start_time = std::chrono::steady_clock::now();
+        
         if (req.body.empty()) {
             Logger::warn("Empty request body");
+            metrics.incrementFailedRequests();
             res.status = 400;
-            res.set_content(R"({"error": "Empty request body", "success": false})", "application/json");
+            std::string error_response = R"({"error": "Empty request body", "success": false})";
+            metrics.incrementBytesSent(error_response.size());
+            res.set_content(error_response, "application/json");
             return;
         }
         
-        try 
-		{
+        try {
             auto response = request_handler_->processRequest(req.body);
+            metrics.incrementSuccessfulRequests();
+            metrics.incrementBytesSent(response.size());
             res.set_content(std::move(response), "application/json");
         } 
-        catch (const std::exception& e) 
-		{
+        catch (const std::exception& e) {
+            metrics.incrementFailedRequests();
             Logger::error("Request processing error: {}", e.what());
             res.status = 500;
-            res.set_content(R"({"error": "Internal server error", "success": false})", "application/json");
-        } });
+            std::string error_response = R"({"error": "Internal server error", "success": false})";
+            metrics.incrementBytesSent(error_response.size());
+            res.set_content(error_response, "application/json");
+        }
+        
+        auto end_time = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        double duration_seconds = duration.count() / 1000000.0;
+        metrics.updateRequestDuration(duration_seconds);
+        metrics.updateRequestDurationHistogram(duration_seconds); });
 
-	// Asynchronous processing endpoint
+	// Asynchronous processing endpoint - UPDATED with metrics
 	server_->Post("/process-async", [this](const httplib::Request &req, httplib::Response &res)
 				  {
+        auto& metrics = Metrics::getInstance();
+        metrics.incrementRequests();
+        metrics.incrementBytesReceived(req.body.size());
+        
+        auto start_time = std::chrono::steady_clock::now();
+        
         if (req.body.empty()) {
             Logger::warn("Empty request body");
+            metrics.incrementFailedRequests();
             res.status = 400;
-            res.set_content(R"({"error": "Empty request body", "success": false})", "application/json");
+            std::string error_response = R"({"error": "Empty request body", "success": false})";
+            metrics.incrementBytesSent(error_response.size());
+            res.set_content(error_response, "application/json");
             return;
         }
         
         try {
             auto future_response = request_handler_->processRequestAsync(req.body);
             auto response = future_response.get();
+            metrics.incrementSuccessfulRequests();
+            metrics.incrementBytesSent(response.size());
             res.set_content(std::move(response), "application/json");
             Logger::info("Async request processed successfully");
         } 
         catch (const std::exception& e) {
+            metrics.incrementFailedRequests();
             Logger::error("Async request processing error: {}", e.what());
             res.status = 500;
-            res.set_content(R"({"error": "Internal server error", "success": false})", "application/json");
-        } });
+            std::string error_response = R"({"error": "Internal server error", "success": false})";
+            metrics.incrementBytesSent(error_response.size());
+            res.set_content(error_response, "application/json");
+        }
+        
+        auto end_time = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        double duration_seconds = duration.count() / 1000000.0;
+        metrics.updateRequestDuration(duration_seconds);
+        metrics.updateRequestDurationHistogram(duration_seconds); });
+
+	// Connection tracking - Add connection callbacks
+	server_->set_pre_routing_handler([&](const httplib::Request &/*req*/, httplib::Response &/*res*/)
+									 {
+        auto& metrics = Metrics::getInstance();
+        metrics.incrementConnections();
+        return httplib::Server::HandlerResponse::Unhandled; });
+
+	server_->set_post_routing_handler([&](const httplib::Request &/*req*/, httplib::Response &/*res*/)
+									  {
+        auto& metrics = Metrics::getInstance();
+        metrics.decrementConnections();
+        return httplib::Server::HandlerResponse::Unhandled; });
 
 	// 404 handler
 	server_->set_error_handler([](const httplib::Request &, httplib::Response &res)
 							   {
         if (res.status == 404) {
             Logger::warn("404 - Endpoint not found");
+            auto& metrics = Metrics::getInstance();
+            metrics.incrementBytesSent(res.body.size());
             res.set_content(R"({"error": "Endpoint not found", "success": false})", "application/json");
         } });
 }

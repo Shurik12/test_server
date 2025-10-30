@@ -6,6 +6,7 @@
 #include <algorithm>
 
 #include <logging/Logger.h>
+#include <server/Metrics.h>
 #include <server/MultiplexingServer.h>
 
 // Initialize static member
@@ -264,6 +265,11 @@ void MultiplexingServer::handleNewConnection()
 	}
 
 	clients_[client_fd] = {client_fd, "", time(nullptr)};
+
+	// Track connection metrics
+	auto &metrics = Metrics::getInstance();
+	metrics.incrementConnections();
+
 	Logger::debug("New client connected: fd {}", client_fd);
 }
 
@@ -301,6 +307,11 @@ void MultiplexingServer::closeClient(int client_fd)
 	FD_CLR(client_fd, &master_fds_);
 	close(client_fd);
 	clients_.erase(client_fd);
+
+	// Track connection metrics
+	auto &metrics = Metrics::getInstance();
+	metrics.decrementConnections();
+
 	Logger::debug("Client disconnected: fd {}", client_fd);
 }
 
@@ -329,25 +340,30 @@ bool MultiplexingServer::parseHttpRequest(const std::string &data, std::string &
 std::string MultiplexingServer::handleHttpRequest(const std::string &method,
 												  const std::string &path, const std::string &body)
 {
+	auto &metrics = Metrics::getInstance();
+
 	if (method == "GET")
 	{
 		if (path == "/health")
 		{
+			Logger::debug("Health check request");
 			return R"({"status": "healthy", "success": true})";
 		}
 		else if (path == "/metrics")
 		{
-			return R"({"active_connections": 0, "requests_processed": 0, "success": true})";
+			Logger::debug("Metrics request");
+			return metrics.getPrometheusMetrics();
 		}
 		else if (path == "/")
 		{
+			Logger::debug("Root endpoint request");
 			return R"({
                 "service": "C++ JSON Processing Service",
                 "version": "1.0.0",
                 "endpoints": {
                     "GET /": "API documentation",
                     "GET /health": "Service health check",
-                    "GET /metrics": "Service metrics", 
+                    "GET /metrics": "Prometheus metrics", 
                     "POST /process": "Process JSON request"
                 }
             })";
@@ -355,26 +371,62 @@ std::string MultiplexingServer::handleHttpRequest(const std::string &method,
 	}
 	else if (method == "POST" && path == "/process")
 	{
+		auto start_time = std::chrono::steady_clock::now();
+		metrics.incrementRequests();
+		metrics.incrementBytesReceived(body.size());
+
 		if (body.empty())
 		{
+			Logger::warn("Empty request body");
+			metrics.incrementFailedRequests();
 			return R"({"error": "Empty request body", "success": false})";
 		}
-		return request_handler_->processRequest(body);
+
+		try
+		{
+			std::string response = request_handler_->processRequest(body);
+			metrics.incrementSuccessfulRequests();
+			metrics.incrementBytesSent(response.size());
+
+			auto end_time = std::chrono::steady_clock::now();
+			auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+			double duration_seconds = duration.count() / 1000000.0;
+			metrics.updateRequestDuration(duration_seconds);
+			metrics.updateRequestDurationHistogram(duration_seconds);
+
+			return response;
+		}
+		catch (const std::exception &e)
+		{
+			metrics.incrementFailedRequests();
+			Logger::error("Request processing error: {}", e.what());
+
+			auto end_time = std::chrono::steady_clock::now();
+			auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+			double duration_seconds = duration.count() / 1000000.0;
+			metrics.updateRequestDuration(duration_seconds);
+			metrics.updateRequestDurationHistogram(duration_seconds);
+
+			return R"({"error": "Internal server error", "success": false})";
+		}
 	}
 
+	// 404 - Not Found
 	return R"({"error": "Endpoint not found", "success": false})";
 }
 
-std::string MultiplexingServer::createHttpResponse(const std::string &content)
+std::string MultiplexingServer::createHttpResponse(const std::string &content, const std::string &content_type)
 {
 	std::stringstream response;
 	response << "HTTP/1.1 200 OK\r\n";
-	response << "Content-Type: application/json\r\n";
+	response << "Content-Type: " << content_type << "\r\n";
 	response << "Content-Length: " << content.length() << "\r\n";
 	response << "Connection: keep-alive\r\n";
+	response << "Access-Control-Allow-Origin: *\r\n";
+	response << "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n";
+	response << "Access-Control-Allow-Headers: Content-Type\r\n";
 	response << "\r\n";
 	response << content;
-
 	return response.str();
 }
 
@@ -383,10 +435,33 @@ void MultiplexingServer::processRequest(int client_fd, const std::string &reques
 	std::string method, path, body;
 	if (parseHttpRequest(request, method, path, body))
 	{
-		std::string response_content = handleHttpRequest(method, path, body);
-		std::string http_response = createHttpResponse(response_content);
+		Logger::debug("Processing {} {}", method, path);
 
-		send(client_fd, http_response.c_str(), http_response.length(), 0);
+		std::string response_content = handleHttpRequest(method, path, body);
+
+		// Set proper content type - FIXED
+		std::string content_type = "application/json";
+		if (method == "GET" && path == "/metrics")
+		{
+			content_type = "text/plain; version=0.0.4; charset=utf-8";
+			Logger::debug("Setting metrics content type: {}", content_type);
+		}
+
+		std::string http_response = createHttpResponse(response_content, content_type);
+		ssize_t bytes_sent = send(client_fd, http_response.c_str(), http_response.length(), 0);
+
+		if (bytes_sent < 0)
+		{
+			Logger::error("Failed to send response to client {}", client_fd);
+		}
+	}
+	else
+	{
+		Logger::error("Failed to parse HTTP request");
+		std::string error_response = createHttpResponse(
+			R"({"error": "Invalid HTTP request", "success": false})",
+			"application/json");
+		send(client_fd, error_response.c_str(), error_response.length(), 0);
 	}
 }
 
