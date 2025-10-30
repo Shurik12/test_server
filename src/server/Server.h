@@ -7,8 +7,9 @@
 
 #include <common/httplib.h>
 #include <server/RequestHandler.h>
+#include <server/IServer.h>
 
-class Server
+class Server : public IServer
 {
 public:
 	Server(std::string host = "0.0.0.0", int port = 8080);
@@ -22,19 +23,20 @@ public:
 	Server(Server &&) = default;
 	Server &operator=(Server &&) = default;
 
-	// Server control
-	bool start();
-	bool run();
-	void stop();
+	// IServer implementation
+	bool start() override;
+	bool run() override;
+	void stop() override;
 
 	// Status queries
-	bool isRunning() const noexcept { return running_; }
-	bool isReady() const noexcept { return running_ && ready_; }
+	bool isRunning() const noexcept override { return running_; }
+	bool isReady() const noexcept override { return running_ && ready_; }
 
 	// Server information
-	const std::string &getHost() const noexcept { return host_; }
-	int getPort() const noexcept { return port_; }
-	std::string getAddress() const { return host_ + ":" + std::to_string(port_); }
+	const std::string &getHost() const noexcept override { return host_; }
+	int getPort() const noexcept override { return port_; }
+	std::string getAddress() const override { return host_ + ":" + std::to_string(port_); }
+	std::string getType() const override { return "blocking"; }
 
 private:
 	void setupRoutes();
@@ -43,7 +45,7 @@ private:
 	void cleanup();
 	bool waitForThreadStart(int timeout_ms = 2000);
 
-	// Signal handling - make this public or use friend function
+	// Signal handling
 	static void handleSignal(int signal);
 
 	// Server configuration
