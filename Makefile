@@ -23,10 +23,16 @@ JOBS ?= 4
 .DEFAULT_GOAL := help
 
 # Phony targets
-.PHONY: all configure build run clean help debug release test install
+.PHONY: all configure build run clean help debug release test install install_deps docker-build docker-run docker-down docker-logs docker-shell
 
 # Main targets
 all: configure build
+
+## Install system dependencies
+install_deps:
+	@echo "Installing system dependencies..."
+	@chmod +x install_deps.sh
+	@./install_deps.sh
 
 ## Configure the project
 configure:
@@ -79,25 +85,34 @@ logs:
 ## Show this help message
 help:
 	@echo "Available targets:"
-	@echo "  all        - Configure and build the project (default)"
-	@echo "  configure  - Configure CMake project in build directory"
-	@echo "  build      - Build the project using Ninja"
-	@echo "  run        - Build and run the service"
+	@echo "  all           - Configure and build the project (default)"
+	@echo "  install_deps  - Install system dependencies"
+	@echo "  configure     - Configure CMake project in build directory"
+	@echo "  build         - Build the project using Ninja"
+	@echo "  run           - Build and run the service"
 	@echo "  run-background - Build and run in background"
-	@echo "  debug      - Clean and build with debug symbols"
-	@echo "  release    - Clean and build with optimizations"
-	@echo "  clean      - Remove build directory"
-	@echo "  test       - Run tests (if configured)"
-	@echo "  install    - Install the service"
-	@echo "  logs       - Create logs directory"
-	@echo "  help       - Show this help message"
+	@echo "  debug         - Clean and build with debug symbols"
+	@echo "  release       - Clean and build with optimizations"
+	@echo "  clean         - Remove build directory"
+	@echo "  test          - Run tests (if configured)"
+	@echo "  install       - Install the service"
+	@echo "  logs          - Create logs directory"
+	@echo "  help          - Show this help message"
+	@echo ""
+	@echo "Docker targets:"
+	@echo "  docker-build  - Build Docker image using Makefile"
+	@echo "  docker-run    - Start services with Docker Compose"
+	@echo "  docker-down   - Stop services"
+	@echo "  docker-logs   - View service logs"
+	@echo "  docker-shell  - Shell into service container"
 	@echo ""
 	@echo "Environment variables:"
-	@echo "  BUILD_TYPE - Build type: Debug or Release (default: Debug)"
-	@echo "  JOBS       - Number of parallel jobs for ninja (default: 4)"
+	@echo "  BUILD_TYPE    - Build type: Debug or Release (default: Debug)"
+	@echo "  JOBS          - Number of parallel jobs for ninja (default: 4)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make                         # Configure and build"
+	@echo "  make install_deps            # Install dependencies first"
 	@echo "  make debug                   # Build with debug symbols"
 	@echo "  make run                     # Build and run"
 	@echo "  make BUILD_TYPE=Debug run    # Build debug and run"
@@ -156,3 +171,35 @@ info:
 	@echo "Compiler: $(CXX)"
 	@echo "CMake generator: Ninja"
 	@echo "Parallel jobs: $(JOBS)"
+
+# Docker targets
+## Build Docker image using Makefile
+docker-build:
+	@echo "Building Docker image using Makefile..."
+	docker build -t cpp-service:latest .
+
+## Run services with Docker Compose
+docker-run: docker-build
+	@echo "Starting services with Docker Compose..."
+	docker-compose up -d
+
+## Stop services
+docker-down:
+	@echo "Stopping services..."
+	docker-compose down
+
+## View logs
+docker-logs:
+	docker-compose logs -f
+
+## Shell into service container
+docker-shell:
+	docker-compose exec cpp-service /bin/bash
+
+## Run tests in container
+docker-test:
+	docker-compose run --rm cpp-service make test
+
+## Development mode with hot reload (if needed)
+docker-dev: docker-build
+	docker-compose -f docker-compose.dev.yml up -d
