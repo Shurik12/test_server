@@ -23,6 +23,7 @@ set(SRC_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/common
     ${CMAKE_CURRENT_SOURCE_DIR}/src/config
     ${CMAKE_CURRENT_SOURCE_DIR}/src/logging
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/metrics
     ${CMAKE_CURRENT_SOURCE_DIR}/src/server
 )
 set(src_headers)

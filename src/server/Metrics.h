@@ -5,6 +5,8 @@
 #include <sstream>
 #include <mutex>
 #include <chrono>
+#include <vector>
+#include <algorithm>
 
 class Metrics
 {
@@ -16,7 +18,11 @@ public:
 	}
 
 	// Request metrics
-	void incrementRequests() { requests_total_++; }
+	void incrementRequests()
+	{
+		requests_total_++;
+		recordRequestTiming(); // Record timing for RPS calculation
+	}
 	void incrementSuccessfulRequests() { requests_successful_++; }
 	void incrementFailedRequests() { requests_failed_++; }
 
@@ -43,7 +49,6 @@ public:
 	void updateRequestDurationHistogram(double duration_seconds)
 	{
 		std::lock_guard<std::mutex> lock(histogram_mutex_);
-		// Simple histogram buckets (in seconds)
 		if (duration_seconds < 0.001)
 			request_duration_bucket_1ms_++;
 		else if (duration_seconds < 0.01)
@@ -63,6 +68,21 @@ public:
 	void incrementBytesReceived(size_t bytes) { bytes_received_ += bytes; }
 	void incrementBytesSent(size_t bytes) { bytes_sent_ += bytes; }
 
+	// RPS calculation
+	double getRequestsPerSecond()
+	{
+		std::lock_guard<std::mutex> lock(rps_mutex_);
+		auto now = std::chrono::steady_clock::now();
+		auto cutoff = now - std::chrono::seconds(1);
+
+		// Count requests in the last second
+		auto count = std::count_if(request_timestamps_.begin(), request_timestamps_.end(),
+								   [cutoff](const auto &timestamp)
+								   { return timestamp >= cutoff; });
+
+		return static_cast<double>(count);
+	}
+
 	// Reset metrics (useful for testing)
 	void reset()
 	{
@@ -76,6 +96,7 @@ public:
 
 		std::lock_guard<std::mutex> lock1(duration_mutex_);
 		std::lock_guard<std::mutex> lock2(histogram_mutex_);
+		std::lock_guard<std::mutex> lock3(rps_mutex_);
 		request_duration_seconds_ = 0.0;
 		request_duration_bucket_1ms_ = 0;
 		request_duration_bucket_10ms_ = 0;
@@ -84,6 +105,7 @@ public:
 		request_duration_bucket_inf_ = 0;
 		request_duration_sum_ = 0.0;
 		request_duration_count_ = 0;
+		request_timestamps_.clear();
 	}
 
 	std::string getPrometheusMetrics()
@@ -116,6 +138,11 @@ public:
 		ss << "# TYPE cpp_service_request_duration_seconds gauge\n";
 		ss << "cpp_service_request_duration_seconds " << request_duration_seconds_ << "\n\n";
 
+		// RPS metric - NEW
+		ss << "# HELP cpp_service_requests_per_second Current requests per second\n";
+		ss << "# TYPE cpp_service_requests_per_second gauge\n";
+		ss << "cpp_service_requests_per_second " << getRequestsPerSecond() << "\n\n";
+
 		// Histogram metrics
 		ss << "# HELP cpp_service_request_duration_seconds_histogram Request duration histogram\n";
 		ss << "# TYPE cpp_service_request_duration_seconds_histogram histogram\n";
@@ -147,6 +174,22 @@ public:
 private:
 	Metrics() = default;
 
+	// Record request timestamp for RPS calculation
+	void recordRequestTiming()
+	{
+		std::lock_guard<std::mutex> lock(rps_mutex_);
+		auto now = std::chrono::steady_clock::now();
+		request_timestamps_.push_back(now);
+
+		// Clean up old entries (keep last 60 seconds)
+		auto cutoff = now - std::chrono::seconds(60);
+		request_timestamps_.erase(
+			std::remove_if(request_timestamps_.begin(), request_timestamps_.end(),
+						   [cutoff](const auto &timestamp)
+						   { return timestamp < cutoff; }),
+			request_timestamps_.end());
+	}
+
 	// Request metrics
 	std::atomic<long> requests_total_{0};
 	std::atomic<long> requests_successful_{0};
@@ -173,4 +216,8 @@ private:
 	// Throughput metrics
 	std::atomic<long> bytes_received_{0};
 	std::atomic<long> bytes_sent_{0};
+
+	// RPS calculation storage
+	std::vector<std::chrono::steady_clock::time_point> request_timestamps_;
+	std::mutex rps_mutex_;
 };

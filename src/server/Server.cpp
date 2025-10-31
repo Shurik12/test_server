@@ -333,13 +333,13 @@ void Server::setupRoutes()
         metrics.updateRequestDurationHistogram(duration_seconds); });
 
 	// Connection tracking - Add connection callbacks
-	server_->set_pre_routing_handler([&](const httplib::Request &/*req*/, httplib::Response &/*res*/)
+	server_->set_pre_routing_handler([&](const httplib::Request & /*req*/, httplib::Response & /*res*/)
 									 {
         auto& metrics = Metrics::getInstance();
         metrics.incrementConnections();
         return httplib::Server::HandlerResponse::Unhandled; });
 
-	server_->set_post_routing_handler([&](const httplib::Request &/*req*/, httplib::Response &/*res*/)
+	server_->set_post_routing_handler([&](const httplib::Request & /*req*/, httplib::Response & /*res*/)
 									  {
         auto& metrics = Metrics::getInstance();
         metrics.decrementConnections();

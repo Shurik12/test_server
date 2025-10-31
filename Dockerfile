@@ -16,9 +16,9 @@ RUN mkdir -p /app/logs
 WORKDIR /app
 
 # Copy binaries and config
-COPY ./build/server .
-COPY ./build/client .
 COPY ./config.yaml .
+COPY ./build/client .
+COPY ./build/server .
 
 EXPOSE 8080
 

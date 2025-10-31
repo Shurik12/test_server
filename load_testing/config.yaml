@@ -1,0 +1,41 @@
+# Load Testing Configuration
+
+base_url: "http://localhost:8080"
+
+# Stress Test Configuration
+stress_test:
+  duration: 300
+  concurrent_users: 100
+  ramp_up_time: 30
+
+# Spike Test Configuration
+spike_test:
+  duration: 180
+  concurrent_users: 300
+  phases:
+    - duration: 30
+      users: 50
+    - duration: 10
+      users: 300
+    - duration: 30
+      users: 50
+    - duration: 10
+      users: 500
+    - duration: 30
+      users: 50
+
+# Endurance Test Configuration
+endurance_test:
+  duration: 1800 # 30 minutes
+  concurrent_users: 50
+
+# Request settings
+timeout: 10
+max_retries: 3
+
+# Data generation
+data_generation:
+  min_id: 1
+  max_id: 1000000
+  name_length: 8
+  phone_prefix: "+1"
