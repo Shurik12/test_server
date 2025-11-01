@@ -234,21 +234,67 @@ void Server::setupRoutes()
         auto& metrics = Metrics::getInstance();
         res.set_content(metrics.getPrometheusMetrics(), "text/plain"); });
 
+	server_->Get("/numbers/sum", [this](const httplib::Request &, httplib::Response &res)
+				 {
+    Logger::debug("Total numbers sum request");
+    auto total_sum = request_handler_->getTotalNumbersSum();
+    res.set_content(R"({"total_numbers_sum": )" + std::to_string(total_sum) + R"(, "success": true})", "application/json"); });
+
+	// Client numbers tracking endpoint
+	server_->Get("/numbers/sum/(.*)", [this](const httplib::Request &req, httplib::Response &res)
+				 {
+    std::string client_id = req.matches[1];
+    Logger::debug("Client numbers sum request for: {}", client_id);
+    auto client_sum = request_handler_->getClientNumbersSum(client_id);
+    res.set_content(R"({"client_id": ")" + client_id + R"(", "numbers_sum": )" + std::to_string(client_sum) + R"(, "success": true})", "application/json"); });
+
+	// All clients numbers endpoint
+	server_->Get("/numbers/sum-all", [this](const httplib::Request &, httplib::Response &res)
+				 {
+    Logger::debug("All clients numbers sum request");
+    auto all_sums = request_handler_->getAllClientSums();
+    
+    rapidjson::Document doc;
+    doc.SetObject();
+    rapidjson::Document::AllocatorType &allocator = doc.GetAllocator();
+    
+    doc.AddMember("success", true, allocator);
+    
+    rapidjson::Value clients(rapidjson::kObjectType);
+    for (const auto& [client_id, sum] : all_sums) {
+        clients.AddMember(
+            rapidjson::Value(client_id.c_str(), allocator).Move(),
+            rapidjson::Value(static_cast<int64_t>(sum)), // Fix: cast to int64_t
+            allocator
+        );
+    }
+    doc.AddMember("clients", clients, allocator);
+    doc.AddMember("total", rapidjson::Value(static_cast<int64_t>(request_handler_->getTotalNumbersSum())), allocator); // Fix: cast to int64_t
+    
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    doc.Accept(writer);
+    
+    res.set_content(buffer.GetString(), "application/json"); });
+
 	// Root endpoint - API documentation
 	server_->Get("/", [](const httplib::Request &, httplib::Response &res)
 				 {
         Logger::debug("Root endpoint request");
         res.set_content(R"({
-            "service": "C++ JSON Processing Service",
-            "version": "1.0.0",
-            "endpoints": {
-                "GET /": "API documentation",
-                "GET /health": "Service health check",
-                "GET /metrics": "Prometheus metrics", 
-                "POST /process": "Process JSON request synchronously",
-                "POST /process-async": "Process JSON request asynchronously"
-            }
-        })", "application/json"); });
+			"service": "C++ JSON Processing Service",
+			"version": "1.0.0",
+			"endpoints": {
+				"GET /": "API documentation",
+				"GET /health": "Service health check",
+				"GET /metrics": "Prometheus metrics", 
+				"GET /numbers/sum": "Get total sum of all processed numbers",
+				"GET /numbers/sum/{client_id}": "Get sum of numbers for specific client",
+				"GET /numbers/sum-all": "Get sums for all clients",
+				"POST /process": "Process JSON request synchronously",
+				"POST /process-async": "Process JSON request asynchronously"
+			}
+		})", "application/json"); });
 
 	// Synchronous processing endpoint - UPDATED with metrics
 	server_->Post("/process", [this](const httplib::Request &req, httplib::Response &res)

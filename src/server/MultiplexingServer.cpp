@@ -289,16 +289,75 @@ void MultiplexingServer::handleClientData(int client_fd)
 	client.buffer.append(buffer);
 	client.last_activity = time(nullptr);
 
-	// Check if we have a complete HTTP request
-	size_t header_end = client.buffer.find("\r\n\r\n");
-	if (header_end != std::string::npos)
+	// Process all complete requests in the buffer
+	size_t request_start = 0;
+	while (request_start < client.buffer.length())
 	{
-		std::string method, path, body;
-		if (parseHttpRequest(client.buffer, method, path, body))
+		// Look for the end of headers
+		size_t header_end = client.buffer.find("\r\n\r\n", request_start);
+		if (header_end == std::string::npos)
 		{
-			processRequest(client_fd, client.buffer);
-			client.buffer.clear();
+			// Incomplete headers, wait for more data
+			break;
 		}
+
+		// Parse headers to get Content-Length
+		std::string headers = client.buffer.substr(request_start, header_end - request_start + 4);
+		size_t content_length = 0;
+
+		// Extract Content-Length from headers
+		size_t cl_pos = headers.find("Content-Length:");
+		if (cl_pos != std::string::npos)
+		{
+			size_t cl_end = headers.find("\r\n", cl_pos);
+			std::string cl_str = headers.substr(cl_pos + 15, cl_end - cl_pos - 15);
+			content_length = std::stoul(cl_str);
+		}
+
+		// Check if we have the complete body
+		size_t body_start = header_end + 4;
+		size_t total_request_length = body_start + content_length;
+
+		if (client.buffer.length() < total_request_length)
+		{
+			// Incomplete body, wait for more data
+			break;
+		}
+
+		// Extract complete request
+		std::string complete_request = client.buffer.substr(request_start, total_request_length);
+
+		// Process this complete request
+		std::string method, path, body;
+		if (parseHttpRequest(complete_request, method, path, body))
+		{
+			processRequest(client_fd, complete_request);
+		}
+		else
+		{
+			Logger::error("Failed to parse complete HTTP request");
+			// Send error response
+			std::string error_response = createHttpResponse(
+				R"({"error": "Invalid HTTP request", "success": false})",
+				"application/json");
+			send(client_fd, error_response.c_str(), error_response.length(), 0);
+		}
+
+		// Move to next request in buffer
+		request_start = total_request_length;
+	}
+
+	// Remove processed requests from buffer
+	if (request_start > 0)
+	{
+		client.buffer.erase(0, request_start);
+	}
+
+	// If buffer is getting too large, clear it to prevent memory issues
+	if (client.buffer.length() > 16384)
+	{ // 16KB limit
+		Logger::warn("Client buffer too large, clearing. fd: {}", client_fd);
+		client.buffer.clear();
 	}
 }
 
@@ -354,19 +413,54 @@ std::string MultiplexingServer::handleHttpRequest(const std::string &method,
 			Logger::debug("Metrics request");
 			return metrics.getPrometheusMetrics();
 		}
+		else if (method == "GET" && path == "/numbers/sum")
+		{
+			Logger::debug("Total numbers sum request");
+			auto total_sum = request_handler_->getTotalNumbersSum();
+			return R"({"total_numbers_sum": )" + std::to_string(total_sum) + R"(, "success": true})";
+		}
+		else if (method == "GET" && path.find("/numbers/sum/") == 0)
+		{
+			std::string client_id = path.substr(13); // Remove "/numbers/sum/"
+			Logger::debug("Client numbers sum request for: {}", client_id);
+			auto client_sum = request_handler_->getClientNumbersSum(client_id);
+			return R"({"client_id": ")" + client_id + R"(", "numbers_sum": )" + std::to_string(client_sum) + R"(, "success": true})";
+		}
+		else if (method == "GET" && path == "/numbers/sum-all")
+		{
+			Logger::debug("All clients numbers sum request");
+			auto all_sums = request_handler_->getAllClientSums();
+
+			std::stringstream ss;
+			ss << R"({"success": true, "clients": {)";
+			bool first = true;
+			for (const auto &[client_id, sum] : all_sums)
+			{
+				if (!first)
+					ss << ",";
+				ss << R"(")" << client_id << R"(":)" << sum;
+				first = false;
+			}
+			ss << R"(}, "total":)" << request_handler_->getTotalNumbersSum() << "}";
+			return ss.str();
+		}
 		else if (path == "/")
 		{
 			Logger::debug("Root endpoint request");
 			return R"({
-                "service": "C++ JSON Processing Service",
-                "version": "1.0.0",
-                "endpoints": {
-                    "GET /": "API documentation",
-                    "GET /health": "Service health check",
-                    "GET /metrics": "Prometheus metrics", 
-                    "POST /process": "Process JSON request"
-                }
-            })";
+				"service": "C++ JSON Processing Service",
+				"version": "1.0.0",
+				"endpoints": {
+					"GET /": "API documentation",
+					"GET /health": "Service health check",
+					"GET /metrics": "Prometheus metrics", 
+					"GET /numbers/sum": "Get total sum of all processed numbers",
+					"GET /numbers/sum/{client_id}": "Get sum of numbers for specific client",
+					"GET /numbers/sum-all": "Get sums for all clients",
+					"POST /process": "Process JSON request synchronously",
+					"POST /process-async": "Process JSON request asynchronously"
+				}
+			})";
 		}
 	}
 	else if (method == "POST" && path == "/process")

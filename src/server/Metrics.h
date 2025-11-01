@@ -83,6 +83,22 @@ public:
 		return static_cast<double>(count);
 	}
 
+	// Number tracking methods
+	void addToTotalNumbersSum(int number)
+	{
+		total_numbers_sum_.fetch_add(number, std::memory_order_relaxed);
+	}
+
+	long long getTotalNumbersSum() const
+	{
+		return total_numbers_sum_.load();
+	}
+
+	void resetTotalNumbersSum()
+	{
+		total_numbers_sum_ = 0;
+	}
+
 	// Reset metrics (useful for testing)
 	void reset()
 	{
@@ -93,6 +109,7 @@ public:
 		active_connections_ = 0;
 		bytes_received_ = 0;
 		bytes_sent_ = 0;
+		total_numbers_sum_ = 0; // Add this line
 
 		std::lock_guard<std::mutex> lock1(duration_mutex_);
 		std::lock_guard<std::mutex> lock2(histogram_mutex_);
@@ -168,28 +185,14 @@ public:
 		ss << "# TYPE cpp_service_info gauge\n";
 		ss << "cpp_service_info{version=\"1.0.0\"} 1\n";
 
+		ss << "# HELP cpp_service_total_numbers_sum Sum of all processed numbers\n";
+		ss << "# TYPE cpp_service_total_numbers_sum counter\n";
+		ss << "cpp_service_total_numbers_sum " << total_numbers_sum_ << "\n\n";
+
 		return ss.str();
 	}
 
 private:
-	Metrics() = default;
-
-	// Record request timestamp for RPS calculation
-	void recordRequestTiming()
-	{
-		std::lock_guard<std::mutex> lock(rps_mutex_);
-		auto now = std::chrono::steady_clock::now();
-		request_timestamps_.push_back(now);
-
-		// Clean up old entries (keep last 60 seconds)
-		auto cutoff = now - std::chrono::seconds(60);
-		request_timestamps_.erase(
-			std::remove_if(request_timestamps_.begin(), request_timestamps_.end(),
-						   [cutoff](const auto &timestamp)
-						   { return timestamp < cutoff; }),
-			request_timestamps_.end());
-	}
-
 	// Request metrics
 	std::atomic<long> requests_total_{0};
 	std::atomic<long> requests_successful_{0};
@@ -220,4 +223,24 @@ private:
 	// RPS calculation storage
 	std::vector<std::chrono::steady_clock::time_point> request_timestamps_;
 	std::mutex rps_mutex_;
+
+	std::atomic<long long> total_numbers_sum_{0};
+
+	Metrics() = default;
+
+	// Record request timestamp for RPS calculation
+	void recordRequestTiming()
+	{
+		std::lock_guard<std::mutex> lock(rps_mutex_);
+		auto now = std::chrono::steady_clock::now();
+		request_timestamps_.push_back(now);
+
+		// Clean up old entries (keep last 60 seconds)
+		auto cutoff = now - std::chrono::seconds(60);
+		request_timestamps_.erase(
+			std::remove_if(request_timestamps_.begin(), request_timestamps_.end(),
+						   [cutoff](const auto &timestamp)
+						   { return timestamp < cutoff; }),
+			request_timestamps_.end());
+	}
 };

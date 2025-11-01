@@ -2,6 +2,7 @@ version: '3.8'
 
 services:
   cpp-service:
+    image: cpp-service:latest
     build:
       context: .
       dockerfile: Dockerfile
