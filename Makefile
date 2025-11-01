@@ -6,8 +6,8 @@ BUILD_DIR = build
 SRC_DIR = src
 
 # Compiler and tools
-CXX = clang++-18
-CC = clang-18
+CXX = clang++-20
+CC = clang-20
 CMAKE = cmake
 NINJA = ninja
 MKDIR = mkdir -p

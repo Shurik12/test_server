@@ -1,6 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 project(CppService VERSION 1.0.0 LANGUAGES CXX)
 
+# Set compilers to Clang 20 (can be overridden from command line)
+# cmake -DCMAKE_CXX_COMPILER=clang++-20 -DCMAKE_C_COMPILER=clang-20 ..
+if(NOT DEFINED CMAKE_CXX_COMPILER)
+    set(CMAKE_CXX_COMPILER "clang++-20")
+endif()
+if(NOT DEFINED CMAKE_C_COMPILER)
+    set(CMAKE_C_COMPILER "clang-20")
+endif()
+
 # Enable testing
 include(CTest)
 enable_testing()
