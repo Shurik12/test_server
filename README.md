@@ -6,7 +6,19 @@ It processes jsons and returns changed jsons. Collect statistics by the stream o
 Httplib Server has async mode for computing. For Multiplexing - not implemented.
 
 ### Build, run
-Use commands form Makefile
+Use commands from Makefile
+```bash
+# 1. Install needed dependencies
+make install
+# 2. Configure and build project
+make configure
+make build
+# 3. Build and run containers
+make docker-build
+make docker-run
+# 4. Stop containers
+make docker-down
+```
 
 ### Load tests
 ```bash
