@@ -3,7 +3,7 @@
 #include <memory>
 
 #include <config/Config.h>
-#include <server/ServerFactory.h> // Use the factory
+#include <server/ServerFactory.h>
 
 int main(int argc, char *argv[])
 {

@@ -27,14 +27,31 @@ public:
 	RequestHandler();
 	~RequestHandler();
 
-	// Synchronous request processing
 	std::string processRequest(const std::string &json_input);
-
-	// Asynchronous request processing
 	std::future<std::string> processRequestAsync(const std::string &json_input);
-
-	// Batch processing for multiple requests
 	std::vector<std::string> processBatchRequests(const std::vector<std::string> &json_inputs);
+
+	long long getTotalNumbersSum() const { return total_numbers_sum_; }
+
+	long long getClientNumbersSum(const std::string &client_id)
+	{
+		std::lock_guard<std::mutex> lock(client_mutex_);
+		auto it = client_numbers_sum_.find(client_id);
+		return it != client_numbers_sum_.end() ? it->second : 0;
+	}
+
+	std::unordered_map<std::string, long long> getAllClientSums()
+	{
+		std::lock_guard<std::mutex> lock(client_mutex_);
+		return client_numbers_sum_;
+	}
+
+	void resetNumberTracking()
+	{
+		total_numbers_sum_ = 0;
+		std::lock_guard<std::mutex> lock(client_mutex_);
+		client_numbers_sum_.clear();
+	}
 
 	// Statistics
 	size_t getRequestsProcessed() const { return requests_processed_; }
@@ -46,26 +63,18 @@ public:
 
 private:
 	friend class RequestHandlerTest;
-	// Parse JSON input
-	UserData parseJson(const std::string &json_input);
 
-	// Validate user data
-	bool validateUserData(const UserData &data);
-
-	// Generate JSON response
-	std::string generateJsonResponse(const UserData &data);
-
-	// Generate error response
-	std::string generateErrorResponse(const std::string &error_message);
-
-	// Calculation function
-	int increase(int number);
-
-	// Process the actual request (used by async method)
-	std::string processRequestInternal(const std::string &json_input);
-
-	// Statistics
 	std::atomic<size_t> requests_processed_{0};
 	std::atomic<size_t> successful_requests_{0};
 	std::atomic<size_t> failed_requests_{0};
+	std::atomic<long long> total_numbers_sum_{0};
+	std::unordered_map<std::string, long long> client_numbers_sum_;
+	std::mutex client_mutex_;
+
+	UserData parseJson(const std::string &json_input);
+	bool validateUserData(const UserData &data);
+	std::string generateJsonResponse(const UserData &data);
+	std::string generateErrorResponse(const std::string &error_message);
+	int increase(int number);
+	std::string processRequestInternal(const std::string &json_input);
 };

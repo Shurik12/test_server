@@ -1,0 +1,317 @@
+[
+  {
+    "timestamp": "2025-10-31T18:27:10.823387",
+    "requests_total": 328308.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:27:15.935746",
+    "requests_total": 332370.0,
+    "active_connections": 103.0
+  },
+  {
+    "timestamp": "2025-10-31T18:27:21.047662",
+    "requests_total": 336426.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:27:26.203718",
+    "requests_total": 340457.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:27:31.229861",
+    "requests_total": 344333.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:27:36.361267",
+    "requests_total": 348053.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:27:41.458397",
+    "requests_total": 352037.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:27:46.460465",
+    "requests_total": 354895.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:27:51.579043",
+    "requests_total": 356853.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:27:56.720592",
+    "requests_total": 361225.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:28:01.843891",
+    "requests_total": 364920.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:28:06.960860",
+    "requests_total": 369015.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:28:12.129998",
+    "requests_total": 373068.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:28:17.278011",
+    "requests_total": 377090.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:28:22.346577",
+    "requests_total": 381143.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:28:27.519975",
+    "requests_total": 384925.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:28:32.604621",
+    "requests_total": 388949.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:28:37.761514",
+    "requests_total": 393016.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:28:42.863206",
+    "requests_total": 397014.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:28:48.028938",
+    "requests_total": 401146.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:28:53.144319",
+    "requests_total": 405168.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:28:58.299683",
+    "requests_total": 409179.0,
+    "active_connections": 102.0
+  },
+  {
+    "timestamp": "2025-10-31T18:29:03.302090",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:29:08.303930",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:29:13.305820",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:29:18.308025",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:29:23.310164",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:29:28.312226",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:29:33.314399",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:29:38.316410",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:29:43.318518",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:29:48.320833",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:29:53.323057",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:29:58.325157",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:30:03.327265",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:30:08.329395",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:30:13.331634",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:30:18.333862",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:30:23.335952",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:30:28.338053",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:30:33.340127",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:30:38.342272",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:30:43.344416",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:30:48.346535",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:30:53.348652",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:30:58.350837",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:31:03.352955",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:31:08.355088",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:31:13.357288",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:31:18.359410",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:31:23.361572",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:31:28.363709",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:31:33.365921",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:31:38.368049",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:31:43.370195",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:31:48.372345",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:31:53.374491",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:31:58.376637",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:32:03.378801",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:32:08.380777",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:32:13.382941",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:32:18.385112",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  },
+  {
+    "timestamp": "2025-10-31T18:32:23.387300",
+    "requests_total": 412859.0,
+    "active_connections": 2.0
+  }
+]

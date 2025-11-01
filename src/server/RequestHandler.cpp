@@ -158,8 +158,22 @@ std::string RequestHandler::processRequestInternal(const std::string &json_input
 		Logger::debug("Parsed data - id: {}, name: {}, phone: {}, number: {}",
 					  user_data.id, user_data.name, user_data.phone, user_data.number);
 
+		// Track the original number before processing
+		int original_number = user_data.number;
+
 		// Perform calculation
 		user_data.number = increase(user_data.number);
+
+		// Update number tracking - use client IP or user ID as client identifier
+		std::string client_id = "user_" + std::to_string(user_data.id);
+
+		// Fix: Use atomic fetch_add for thread safety
+		total_numbers_sum_.fetch_add(original_number, std::memory_order_relaxed);
+
+		{
+			std::lock_guard<std::mutex> lock(client_mutex_);
+			client_numbers_sum_[client_id] += static_cast<long long>(original_number);
+		}
 
 		// Generate response
 		std::string response = generateJsonResponse(user_data);
@@ -192,17 +206,11 @@ std::vector<std::string> RequestHandler::processBatchRequests(const std::vector<
 	std::vector<std::future<std::string>> futures;
 	std::vector<std::string> results;
 
-	// Start async processing for all requests
 	for (const auto &json_input : json_inputs)
-	{
 		futures.push_back(processRequestAsync(json_input));
-	}
 
-	// Collect results
 	for (auto &future : futures)
-	{
 		results.push_back(future.get());
-	}
 
 	return results;
 }

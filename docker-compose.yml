@@ -2,6 +2,7 @@ version: '3.8'
 
 services:
   cpp-service:
+    image: cpp-service:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -21,6 +22,12 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
 
   prometheus:
     image: prom/prometheus:latest
@@ -58,10 +65,20 @@ services:
     depends_on:
       - prometheus
 
-  node-exporter:
-    image: prom/node-exporter:latest
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: cadvisor
     ports:
-      - "9100:9100"
+      - "8081:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - /dev/kmsg
     networks:
       - monitoring
     restart: unless-stopped
