@@ -5,6 +5,12 @@ Simple server implementatio, which contains two types: httplib server and multip
 It processes jsons and returns changed jsons. Collect statistics by the stream of data. 
 Httplib Server has async mode for computing. For Multiplexing - not implemented.
 
+Current implementation is already optimal for:
+  1. Single server deployment
+  2. Stateless request processing
+  3. Simple number tracking
+  4. No real-time broadcasting needed
+
 ### Build, run
 Use commands from Makefile
 ```bash
