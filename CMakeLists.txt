@@ -102,6 +102,51 @@ if(BUILD_TESTING)
     set_tests_properties(UnitTests PROPERTIES LABELS "unit")
     set_tests_properties(PerformanceTests PROPERTIES LABELS "performance")
     set_tests_properties(IntegrationTests PROPERTIES LABELS "integration")
+
+    # Google Benchmark
+    find_package(benchmark QUIET)
+    if(benchmark_FOUND)
+        message(STATUS "Google Benchmark found, building load benchmarks")
+
+        # Load benchmark executable
+        add_executable(load_benchmark
+            tests/load_benchmark.cpp
+            ${src_sources}
+        )
+
+        target_include_directories(load_benchmark PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests
+        )
+
+        target_link_libraries(load_benchmark PRIVATE
+            benchmark::benchmark
+            benchmark::benchmark_main
+            spdlog::spdlog
+            fmt::fmt
+            pthread
+        )
+
+        target_compile_options(load_benchmark PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            -O2
+            -Wno-array-bounds
+            -Wno-stringop-overflow
+        )
+
+        # Add benchmark test
+        add_test(NAME LoadBenchmarks COMMAND load_benchmark
+            --benchmark_min_time=5s
+            --benchmark_repetitions=3
+            --benchmark_report_aggregates_only=true
+        )
+        set_tests_properties(LoadBenchmarks PROPERTIES LABELS "benchmark")
+
+    else()
+        message(WARNING "Google Benchmark not found, load benchmarks will not be built")
+    endif()
 endif()
 
 target_compile_options(server PRIVATE
