@@ -33,3 +33,12 @@ python3 load_test.py --test heavy
 python3 load_test.py --test spike
 python3 load_test.py --test numbers
 ```
+
+### 
+
+```bash
+# watch connections
+watch -n 1 'netstat -an | grep :8080 | awk '\''{print $6}'\'' | sort | uniq -c'
+# kill connections
+sudo ss -t -K sport = 8080
+```

@@ -64,6 +64,25 @@ public:
 		request_duration_count_++;
 	}
 
+	// Connection timing metrics - NEW
+	void updateConnectionDuration(double duration_seconds)
+	{
+		std::lock_guard<std::mutex> lock(connection_mutex_);
+		connection_duration_sum_ += duration_seconds;
+		connection_duration_count_++;
+	}
+
+	// Buffer metrics - NEW
+	void updateReadBufferSize(size_t size)
+	{
+		max_read_buffer_size_ = std::max(max_read_buffer_size_.load(), size);
+	}
+
+	void updateWriteBufferSize(size_t size)
+	{
+		max_write_buffer_size_ = std::max(max_write_buffer_size_.load(), size);
+	}
+
 	// Throughput metrics
 	void incrementBytesReceived(size_t bytes) { bytes_received_ += bytes; }
 	void incrementBytesSent(size_t bytes) { bytes_sent_ += bytes; }
@@ -109,11 +128,18 @@ public:
 		active_connections_ = 0;
 		bytes_received_ = 0;
 		bytes_sent_ = 0;
-		total_numbers_sum_ = 0; // Add this line
+		total_numbers_sum_ = 0;
+
+		// New metrics
+		max_read_buffer_size_ = 0;
+		max_write_buffer_size_ = 0;
+		connection_duration_sum_ = 0.0;
+		connection_duration_count_ = 0;
 
 		std::lock_guard<std::mutex> lock1(duration_mutex_);
 		std::lock_guard<std::mutex> lock2(histogram_mutex_);
 		std::lock_guard<std::mutex> lock3(rps_mutex_);
+		std::lock_guard<std::mutex> lock4(connection_mutex_);
 		request_duration_seconds_ = 0.0;
 		request_duration_bucket_1ms_ = 0;
 		request_duration_bucket_10ms_ = 0;
@@ -155,7 +181,7 @@ public:
 		ss << "# TYPE cpp_service_request_duration_seconds gauge\n";
 		ss << "cpp_service_request_duration_seconds " << request_duration_seconds_ << "\n\n";
 
-		// RPS metric - NEW
+		// RPS metric
 		ss << "# HELP cpp_service_requests_per_second Current requests per second\n";
 		ss << "# TYPE cpp_service_requests_per_second gauge\n";
 		ss << "cpp_service_requests_per_second " << getRequestsPerSecond() << "\n\n";
@@ -170,6 +196,24 @@ public:
 		ss << "cpp_service_request_duration_seconds_histogram_bucket{le=\"+Inf\"} " << request_duration_bucket_inf_ << "\n";
 		ss << "cpp_service_request_duration_seconds_histogram_sum " << request_duration_sum_ << "\n";
 		ss << "cpp_service_request_duration_seconds_histogram_count " << request_duration_count_ << "\n\n";
+
+		// New connection duration metrics
+		ss << "# HELP cpp_service_connection_duration_seconds_sum Total connection duration in seconds\n";
+		ss << "# TYPE cpp_service_connection_duration_seconds_sum counter\n";
+		ss << "cpp_service_connection_duration_seconds_sum " << connection_duration_sum_ << "\n\n";
+
+		ss << "# HELP cpp_service_connection_duration_seconds_count Total connection count\n";
+		ss << "# TYPE cpp_service_connection_duration_seconds_count counter\n";
+		ss << "cpp_service_connection_duration_seconds_count " << connection_duration_count_ << "\n\n";
+
+		// New buffer metrics
+		ss << "# HELP cpp_service_max_read_buffer_size Maximum read buffer size observed\n";
+		ss << "# TYPE cpp_service_max_read_buffer_size gauge\n";
+		ss << "cpp_service_max_read_buffer_size " << max_read_buffer_size_ << "\n\n";
+
+		ss << "# HELP cpp_service_max_write_buffer_size Maximum write buffer size observed\n";
+		ss << "# TYPE cpp_service_max_write_buffer_size gauge\n";
+		ss << "cpp_service_max_write_buffer_size " << max_write_buffer_size_ << "\n\n";
 
 		// Throughput metrics
 		ss << "# HELP cpp_service_bytes_received_total Total bytes received\n";
@@ -215,6 +259,15 @@ private:
 	std::atomic<double> request_duration_sum_{0.0};
 	std::atomic<long> request_duration_count_{0};
 	std::mutex histogram_mutex_;
+
+	// New connection timing metrics
+	std::atomic<double> connection_duration_sum_{0.0};
+	std::atomic<long> connection_duration_count_{0};
+	std::mutex connection_mutex_;
+
+	// New buffer metrics
+	std::atomic<size_t> max_read_buffer_size_{0};
+	std::atomic<size_t> max_write_buffer_size_{0};
 
 	// Throughput metrics
 	std::atomic<long> bytes_received_{0};
