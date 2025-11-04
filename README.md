@@ -28,7 +28,12 @@ make docker-down
 
 ### C++ benchmarks and tests
 ```bash
+# benchmark (need running server on 8081 port)
 ./build/load_benchmark --benchmark_min_time=5s
+# unit tests
+cd build && ctest -L "unit"
+# integration tests
+cd build && ctest -L "integration"
 ```
 
 ### Python Load tests
