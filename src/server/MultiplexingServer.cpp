@@ -27,16 +27,19 @@ void MultiplexingServer::handleSignal(int signal)
 MultiplexingServer::ClientConnection::ClientConnection(int fd, const std::string &client_addr,
 													   RequestHandler *request_handler,
 													   const ServerConfig &config,
-													   MultiplexingServer *server)
+													   MultiplexingServer *server, Protocol protocol)
 	: fd_(fd), client_addr_(client_addr), last_activity_(time(nullptr)),
 	  connection_start_time_(time(nullptr)), request_handler_(request_handler),
-	  config_(config), server_(server)
+	  config_(config), server_(server), protocol_(protocol)
 {
-	// Make socket non-blocking
-	int flags = fcntl(fd_, F_GETFL, 0);
-	if (flags != -1)
+	// Make socket non-blocking for stream protocols
+	if (ProtocolFactory::isStreamProtocol(protocol_))
 	{
-		fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
+		int flags = fcntl(fd_, F_GETFL, 0);
+		if (flags != -1)
+		{
+			fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
+		}
 	}
 }
 
@@ -45,7 +48,8 @@ MultiplexingServer::ClientConnection::~ClientConnection()
 	close();
 }
 
-void MultiplexingServer::ClientConnection::reset(int fd, const std::string &client_addr, RequestHandler *request_handler)
+void MultiplexingServer::ClientConnection::reset(int fd, const std::string &client_addr,
+												 RequestHandler *request_handler, Protocol protocol)
 {
 	fd_ = fd;
 	client_addr_ = client_addr;
@@ -57,28 +61,58 @@ void MultiplexingServer::ClientConnection::reset(int fd, const std::string &clie
 	last_activity_ = time(nullptr);
 	connection_start_time_ = time(nullptr);
 	request_handler_ = request_handler;
+	protocol_ = protocol;
 	active_ = true;
+	has_udp_client_ = false;
 
-	// Make socket non-blocking
-	int flags = fcntl(fd_, F_GETFL, 0);
-	if (flags != -1)
+	// Make socket non-blocking for stream protocols
+	if (ProtocolFactory::isStreamProtocol(protocol_))
 	{
-		fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
+		int flags = fcntl(fd_, F_GETFL, 0);
+		if (flags != -1)
+		{
+			fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
+		}
 	}
 }
 
 bool MultiplexingServer::ClientConnection::readAvailable()
 {
+	if (protocol_ == Protocol::UDP)
+	{
+		// UDP is handled differently in handleUdpDatagram
+		return true;
+	}
+
 	char buffer[4096];
 	ssize_t bytes_read;
 
-	// Single read attempt
-	bytes_read = recv(fd_, buffer, sizeof(buffer), MSG_DONTWAIT);
+	if (protocol_ == Protocol::SCTP)
+	{
+#ifdef HAS_SCTP
+		struct sockaddr_in client_addr;
+		socklen_t client_len = sizeof(client_addr);
+		int flags = 0;
+
+		bytes_read = sctp_recvmsg(fd_, buffer, sizeof(buffer),
+								  (struct sockaddr *)&client_addr, &client_len,
+								  NULL, &flags, NULL, NULL);
+#else
+		Logger::error("SCTP support not compiled in");
+		return false;
+#endif
+	}
+	else
+	{
+		// TCP/HTTP
+		bytes_read = recv(fd_, buffer, sizeof(buffer), MSG_DONTWAIT);
+	}
 
 	if (bytes_read > 0)
 	{
-		// Check for buffer overflow protection
-		if (read_buffer_.size() + bytes_read > config_.max_read_buffer_size)
+		// Check for buffer overflow protection (stream protocols only)
+		if (ProtocolFactory::isStreamProtocol(protocol_) &&
+			read_buffer_.size() + bytes_read > config_.max_read_buffer_size)
 		{
 			Logger::warn("Read buffer overflow for client {}, closing", client_addr_);
 			active_ = false;
@@ -92,15 +126,34 @@ bool MultiplexingServer::ClientConnection::readAvailable()
 		auto &metrics = Metrics::getInstance();
 		metrics.updateReadBufferSize(read_buffer_.size());
 
-		processRequests();
+		// For HTTP protocol, process HTTP requests
+		if (protocol_ == Protocol::HTTP)
+		{
+			processRequests();
+		}
+		else if (protocol_ == Protocol::TCP)
+		{
+			// For raw TCP, process as datagram
+			processDatagram(read_buffer_);
+			read_buffer_.clear();
+		}
+		else
+		{
+			// For other protocols, process as datagram
+			processDatagram(read_buffer_);
+			read_buffer_.clear();
+		}
 		return true;
 	}
 	else if (bytes_read == 0)
 	{
-		// CRITICAL: Client disconnected - close immediately
-		Logger::debug("Client disconnected (EOF): {}", client_addr_);
-		active_ = false;
-		return false;
+		// Client disconnected (stream protocols only)
+		if (ProtocolFactory::isStreamProtocol(protocol_))
+		{
+			Logger::debug("Client disconnected (EOF): {}", client_addr_);
+			active_ = false;
+			return false;
+		}
 	}
 	else if (bytes_read == -1)
 	{
@@ -130,6 +183,12 @@ bool MultiplexingServer::ClientConnection::readAvailable()
 
 bool MultiplexingServer::ClientConnection::writeAvailable()
 {
+	if (protocol_ == Protocol::UDP)
+	{
+		// UDP doesn't use write notifications
+		return true;
+	}
+
 	try
 	{
 		std::lock_guard<std::mutex> lock(write_mutex_);
@@ -141,7 +200,23 @@ bool MultiplexingServer::ClientConnection::writeAvailable()
 			return true;
 		}
 
-		ssize_t bytes_sent = send(fd_, write_buffer_.data(), write_buffer_.size(), MSG_NOSIGNAL);
+		ssize_t bytes_sent = 0;
+
+		if (protocol_ == Protocol::SCTP)
+		{
+#ifdef HAS_SCTP
+			bytes_sent = sctp_sendmsg(fd_, write_buffer_.data(), write_buffer_.size(),
+									  NULL, 0, 0, 0, 0, 0, 0);
+#else
+			Logger::error("SCTP support not compiled in");
+			return false;
+#endif
+		}
+		else
+		{
+			// TCP/HTTP
+			bytes_sent = send(fd_, write_buffer_.data(), write_buffer_.size(), MSG_NOSIGNAL);
+		}
 
 		if (bytes_sent > 0)
 		{
@@ -185,6 +260,12 @@ bool MultiplexingServer::ClientConnection::writeAvailable()
 
 void MultiplexingServer::ClientConnection::sendResponse(std::string response)
 {
+	if (protocol_ == Protocol::UDP)
+	{
+		Logger::warn("UDP protocol should use sendUdpResponse");
+		return;
+	}
+
 	try
 	{
 		std::lock_guard<std::mutex> lock(write_mutex_);
@@ -209,16 +290,32 @@ void MultiplexingServer::ClientConnection::sendResponse(std::string response)
 		metrics.updateWriteBufferSize(write_buffer_.size());
 
 		// If buffer was empty, we need to enable write notifications
-		if (was_empty && config_.enable_epollout_optimization)
+		if (was_empty && config_.enable_epollout_optimization &&
+			ProtocolFactory::isStreamProtocol(protocol_))
 		{
 			enableWriteNotifications();
 		}
 
-		// Attempt immediate write
-		if (!write_buffer_.empty())
+		// Attempt immediate write for stream protocols
+		if (!write_buffer_.empty() && ProtocolFactory::isStreamProtocol(protocol_))
 		{
-			ssize_t bytes_sent = send(fd_, write_buffer_.data(), write_buffer_.size(),
-									  MSG_NOSIGNAL | MSG_DONTWAIT);
+			ssize_t bytes_sent = 0;
+
+			if (protocol_ == Protocol::SCTP)
+			{
+#ifdef HAS_SCTP
+				bytes_sent = sctp_sendmsg(fd_, write_buffer_.data(), write_buffer_.size(),
+										  NULL, 0, 0, 0, 0, 0, 0);
+#else
+				Logger::error("SCTP support not compiled in");
+				return;
+#endif
+			}
+			else
+			{
+				bytes_sent = send(fd_, write_buffer_.data(), write_buffer_.size(),
+								  MSG_NOSIGNAL | MSG_DONTWAIT);
+			}
 
 			if (bytes_sent > 0)
 			{
@@ -252,9 +349,38 @@ void MultiplexingServer::ClientConnection::sendResponse(std::string response)
 	}
 }
 
+void MultiplexingServer::ClientConnection::sendUdpResponse(const std::string &response, const sockaddr_in &client_addr)
+{
+	if (protocol_ != Protocol::UDP)
+	{
+		Logger::warn("sendUdpResponse called for non-UDP protocol");
+		return;
+	}
+
+	try
+	{
+		ssize_t bytes_sent = sendto(fd_, response.c_str(), response.length(), 0,
+									(const sockaddr *)&client_addr, sizeof(client_addr));
+
+		if (bytes_sent > 0)
+		{
+			last_activity_ = time(nullptr);
+			Logger::debug("UDP response sent: {} bytes to {}", bytes_sent, client_addr_);
+		}
+		else if (bytes_sent == -1)
+		{
+			Logger::error("UDP send error to {}: {}", client_addr_, strerror(errno));
+		}
+	}
+	catch (const std::exception &e)
+	{
+		Logger::error("Exception in sendUdpResponse for {}: {}", client_addr_, e.what());
+	}
+}
+
 void MultiplexingServer::ClientConnection::enableWriteNotifications()
 {
-	if (server_)
+	if (server_ && ProtocolFactory::isStreamProtocol(protocol_))
 	{
 		server_->enableClientWrite(fd_);
 	}
@@ -262,7 +388,7 @@ void MultiplexingServer::ClientConnection::enableWriteNotifications()
 
 void MultiplexingServer::ClientConnection::disableWriteNotifications()
 {
-	if (server_)
+	if (server_ && ProtocolFactory::isStreamProtocol(protocol_))
 	{
 		server_->disableClientWrite(fd_);
 	}
@@ -272,9 +398,11 @@ void MultiplexingServer::ClientConnection::close()
 {
 	if (fd_ != -1)
 	{
-		// CRITICAL: Properly shutdown socket before close
-		// This completes the TCP handshake and prevents CLOSE_WAIT
-		shutdown(fd_, SHUT_RDWR);
+		// Properly shutdown socket before close for stream protocols
+		if (ProtocolFactory::isStreamProtocol(protocol_))
+		{
+			shutdown(fd_, SHUT_RDWR);
+		}
 
 		// Track connection duration
 		auto connection_duration = time(nullptr) - connection_start_time_;
@@ -299,6 +427,7 @@ void MultiplexingServer::ClientConnection::processRequests()
 		if (header_end == std::string::npos)
 		{
 			// Incomplete headers, wait for more data
+			Logger::debug("Incomplete HTTP headers, waiting for more data. Buffer size: {}", read_buffer_.length());
 			break;
 		}
 
@@ -318,11 +447,25 @@ void MultiplexingServer::ClientConnection::processRequests()
 			try
 			{
 				content_length = std::stoul(cl_str);
+				Logger::debug("Found Content-Length: {}", content_length);
 			}
 			catch (const std::exception &e)
 			{
 				Logger::error("Invalid Content-Length: {}", cl_str);
 				break;
+			}
+		}
+		else
+		{
+			Logger::debug("No Content-Length header found");
+			// For requests without body (like GET), we can still process them
+			if (read_buffer_.find("GET") == pos || read_buffer_.find("POST") == pos)
+			{
+				// Process the request without body
+				std::string complete_request = read_buffer_.substr(pos, header_end + 4 - pos);
+				processCompleteHttpRequest(std::move(complete_request));
+				pos = header_end + 4;
+				continue;
 			}
 		}
 
@@ -333,61 +476,16 @@ void MultiplexingServer::ClientConnection::processRequests()
 		if (read_buffer_.length() < total_request_length)
 		{
 			// Incomplete body, wait for more data
+			Logger::debug("Incomplete HTTP body. Have: {}, Need: {}",
+						  read_buffer_.length() - body_start, content_length);
 			break;
 		}
 
 		// Extract complete request
 		std::string complete_request = read_buffer_.substr(pos, total_request_length);
+		Logger::debug("Processing complete HTTP request of {} bytes", complete_request.length());
 
-		// Use thread pool for request processing
-		if (server_ && server_->thread_pool_)
-		{
-			// Offload to thread pool
-			server_->thread_pool_->enqueue([this,
-											complete_request = std::move(complete_request),
-											client_addr = client_addr_]()
-										   {
-				try {
-					// Parse and handle HTTP request
-					std::string method, path, body;
-					std::unordered_map<std::string, std::string> headers;
-					if (parseHttpRequestOptimized(complete_request, method, path, body, headers)) {
-						std::string response_content = handleHttpRequest(method, path, body);
-						sendResponse(response_content);
-					} else {
-						Logger::error("Failed to parse HTTP request from {}", client_addr);
-						std::string error_response = createHttpResponse(
-							R"({"error": "Invalid HTTP request", "success": false})",
-							"application/json", 400);
-						sendResponse(error_response);
-					}
-				} catch (const std::exception& e) {
-					Logger::error("Exception in request processing for {}: {}", client_addr, e.what());
-					std::string error_response = createHttpResponse(
-						R"({"error": "Internal server error", "success": false})",
-						"application/json", 500);
-					sendResponse(error_response);
-				} });
-		}
-		else
-		{
-			// Process inline (fallback)
-			std::string method, path, body;
-			std::unordered_map<std::string, std::string> headers;
-			if (parseHttpRequest(complete_request, method, path, body, headers))
-			{
-				std::string response_content = handleHttpRequest(method, path, body);
-				sendResponse(response_content);
-			}
-			else
-			{
-				Logger::error("Failed to parse HTTP request from {}", client_addr_);
-				std::string error_response = createHttpResponse(
-					R"({"error": "Invalid HTTP request", "success": false})",
-					"application/json", 400);
-				sendResponse(error_response);
-			}
-		}
+		processCompleteHttpRequest(std::move(complete_request));
 
 		// Move to next request in buffer
 		pos = total_request_length;
@@ -397,6 +495,7 @@ void MultiplexingServer::ClientConnection::processRequests()
 	if (pos > 0)
 	{
 		read_buffer_.erase(0, pos);
+		Logger::debug("Removed {} bytes from buffer, remaining: {}", pos, read_buffer_.length());
 	}
 
 	// Prevent buffer overflow (redundant check for safety)
@@ -404,6 +503,83 @@ void MultiplexingServer::ClientConnection::processRequests()
 	{
 		Logger::warn("Client buffer too large, clearing. addr: {}", client_addr_);
 		read_buffer_.clear();
+	}
+}
+
+void MultiplexingServer::ClientConnection::processCompleteHttpRequest(std::string complete_request)
+{
+	// Use thread pool for request processing
+	if (server_ && server_->thread_pool_)
+	{
+		// Offload to thread pool
+		server_->thread_pool_->enqueue([this,
+										complete_request = std::move(complete_request),
+										client_addr = client_addr_]()
+									   {
+            try {
+                // Parse and handle HTTP request
+                std::string method, path, body;
+                std::unordered_map<std::string, std::string> headers;
+                
+                Logger::debug("Parsing HTTP request from {}", client_addr);
+                if (parseHttpRequestOptimized(complete_request, method, path, body, headers)) {
+                    Logger::debug("Successfully parsed {} {} from {}", method, path, client_addr);
+                    std::string response_content = handleHttpRequest(method, path, body);
+                    sendResponse(response_content);
+                } else {
+                    Logger::error("Failed to parse HTTP request from {}", client_addr);
+                    std::string error_response = createHttpResponse(
+                        R"({"error": "Invalid HTTP request", "success": false})",
+                        "application/json", 400);
+                    sendResponse(error_response);
+                }
+            } catch (const std::exception& e) {
+                Logger::error("Exception in request processing for {}: {}", client_addr, e.what());
+                std::string error_response = createHttpResponse(
+                    R"({"error": "Internal server error", "success": false})",
+                    "application/json", 500);
+                sendResponse(error_response);
+            } });
+	}
+	else
+	{
+		// Process inline (fallback)
+		std::string method, path, body;
+		std::unordered_map<std::string, std::string> headers;
+		if (parseHttpRequest(complete_request, method, path, body, headers))
+		{
+			std::string response_content = handleHttpRequest(method, path, body);
+			sendResponse(response_content);
+		}
+		else
+		{
+			Logger::error("Failed to parse HTTP request from {}", client_addr_);
+			std::string error_response = createHttpResponse(
+				R"({"error": "Invalid HTTP request", "success": false})",
+				"application/json", 400);
+			sendResponse(error_response);
+		}
+	}
+}
+
+void MultiplexingServer::ClientConnection::processDatagram(const std::string &data, const sockaddr_in *client_addr)
+{
+	if (client_addr)
+	{
+		udp_client_addr_ = *client_addr;
+		has_udp_client_ = true;
+	}
+
+	// For UDP/SCTP messages, process as raw data
+	std::string response = handleRawRequest(data);
+
+	if (protocol_ == Protocol::UDP && has_udp_client_)
+	{
+		sendUdpResponse(response, udp_client_addr_);
+	}
+	else
+	{
+		sendResponse(std::move(response));
 	}
 }
 
@@ -553,6 +729,46 @@ std::string MultiplexingServer::ClientConnection::createHttpResponse(const std::
 	return response_str;
 }
 
+std::string MultiplexingServer::ClientConnection::handleRawRequest(const std::string &data)
+{
+	auto &metrics = Metrics::getInstance();
+	metrics.incrementRequests();
+	metrics.incrementBytesReceived(data.size());
+
+	auto start_time = std::chrono::steady_clock::now();
+
+	try
+	{
+		// For raw protocols, echo the data with protocol prefix
+		std::string response_content = "[" + ProtocolFactory::protocolToString(protocol_) +
+									   "] Echo: " + data;
+
+		metrics.incrementSuccessfulRequests();
+		metrics.incrementBytesSent(response_content.size());
+
+		auto end_time = std::chrono::steady_clock::now();
+		auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+		double duration_seconds = duration.count() / 1000000.0;
+		metrics.updateRequestDuration(duration_seconds);
+		metrics.updateRequestDurationHistogram(duration_seconds);
+
+		return response_content;
+	}
+	catch (const std::exception &e)
+	{
+		metrics.incrementFailedRequests();
+		Logger::error("Raw request processing error: {}", e.what());
+
+		auto end_time = std::chrono::steady_clock::now();
+		auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+		double duration_seconds = duration.count() / 1000000.0;
+		metrics.updateRequestDuration(duration_seconds);
+		metrics.updateRequestDurationHistogram(duration_seconds);
+
+		return "Error: " + std::string(e.what());
+	}
+}
+
 std::string MultiplexingServer::ClientConnection::handleHttpRequest(const std::string &method,
 																	const std::string &path,
 																	const std::string &body)
@@ -610,19 +826,19 @@ std::string MultiplexingServer::ClientConnection::handleHttpRequest(const std::s
 		{
 			Logger::debug("Root endpoint request from {}", client_addr_);
 			std::string json_content = R"({
-				"service": "C++ JSON Processing Service",
-				"version": "1.0.0",
-				"endpoints": {
-					"GET /": "API documentation",
-					"GET /health": "Service health check",
-					"GET /metrics": "Prometheus metrics", 
-					"GET /numbers/sum": "Get total sum of all processed numbers",
-					"GET /numbers/sum/{client_id}": "Get sum of numbers for specific client",
-					"GET /numbers/sum-all": "Get sums for all clients",
-					"POST /process": "Process JSON request synchronously",
-					"POST /process-async": "Process JSON request asynchronously"
-				}
-			})";
+                "service": "C++ JSON Processing Service",
+                "version": "1.0.0",
+                "endpoints": {
+                    "GET /": "API documentation",
+                    "GET /health": "Service health check",
+                    "GET /metrics": "Prometheus metrics", 
+                    "GET /numbers/sum": "Get total sum of all processed numbers",
+                    "GET /numbers/sum/{client_id}": "Get sum of numbers for specific client",
+                    "GET /numbers/sum-all": "Get sums for all clients",
+                    "POST /process": "Process JSON request synchronously",
+                    "POST /process-async": "Process JSON request asynchronously"
+                }
+            })";
 			return createHttpResponse(json_content, "application/json", 200);
 		}
 	}
@@ -712,8 +928,8 @@ MultiplexingServer::ThreadPool::~ThreadPool()
 }
 
 // MultiplexingServer implementation
-MultiplexingServer::MultiplexingServer(std::string host, int port)
-	: host_(std::move(host)), port_(port), server_fd_(-1), epoll_fd_(-1)
+MultiplexingServer::MultiplexingServer(std::string host, int port, Protocol protocol)
+	: host_(std::move(host)), port_(port), protocol_(protocol), server_fd_(-1), epoll_fd_(-1)
 {
 	global_instance_ = this;
 	std::signal(SIGINT, MultiplexingServer::handleSignal);
@@ -797,10 +1013,19 @@ void MultiplexingServer::stop()
 
 bool MultiplexingServer::createSocket()
 {
-	server_fd_ = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
+	// For HTTP protocol, we need to create a TCP socket
+	int socket_type = ProtocolFactory::getSocketType(protocol_);
+	int socket_protocol = ProtocolFactory::getSocketProtocol(protocol_);
+
+	Logger::debug("Creating socket - type: {}, protocol: {}", socket_type, socket_protocol);
+
+	server_fd_ = socket(AF_INET, socket_type, socket_protocol);
+
 	if (server_fd_ < 0)
 	{
-		Logger::error("Failed to create socket: {}", strerror(errno));
+		Logger::error("Failed to create {} socket: {}",
+					  ProtocolFactory::protocolToString(protocol_),
+					  strerror(errno));
 		return false;
 	}
 
@@ -818,6 +1043,21 @@ bool MultiplexingServer::createSocket()
 		// Continue anyway
 	}
 
+	// Set socket to non-blocking mode for epoll
+	int flags = fcntl(server_fd_, F_GETFL, 0);
+	if (flags == -1)
+	{
+		Logger::error("Failed to get socket flags: {}", strerror(errno));
+		close(server_fd_);
+		return false;
+	}
+	if (fcntl(server_fd_, F_SETFL, flags | O_NONBLOCK) == -1)
+	{
+		Logger::error("Failed to set socket to non-blocking: {}", strerror(errno));
+		close(server_fd_);
+		return false;
+	}
+
 	// Bind socket
 	struct sockaddr_in address;
 	address.sin_family = AF_INET;
@@ -831,12 +1071,21 @@ bool MultiplexingServer::createSocket()
 		return false;
 	}
 
-	// Listen
-	if (listen(server_fd_, 1024) < 0)
+	// Listen for stream protocols (including HTTP)
+	if (ProtocolFactory::isStreamProtocol(protocol_))
 	{
-		Logger::error("Failed to listen on socket: {}", strerror(errno));
-		close(server_fd_);
-		return false;
+		if (listen(server_fd_, 1024) < 0)
+		{
+			Logger::error("Failed to listen on socket: {}", strerror(errno));
+			close(server_fd_);
+			return false;
+		}
+		Logger::info("HTTP server listening on {}:{}", host_, port_);
+	}
+	else
+	{
+		Logger::info("Raw {} server bound to {}:{}",
+					 ProtocolFactory::protocolToString(protocol_), host_, port_);
 	}
 
 	return true;
@@ -869,14 +1118,21 @@ void MultiplexingServer::initializeServer()
 	}
 
 	// Add server socket to epoll - use level-triggered for better compatibility
-	addToEpoll(server_fd_, EPOLLIN);
+	uint32_t events = EPOLLIN;
+	if (protocol_ == Protocol::UDP)
+	{
+		// For UDP, we only need read notifications
+		events = EPOLLIN;
+	}
+	addToEpoll(server_fd_, events);
 }
 
 void MultiplexingServer::runServer()
 {
 	try
 	{
-		Logger::info("Multiplexing server thread starting on {}", getAddress());
+		Logger::info("Multiplexing server thread starting on {} ({})",
+					 getAddress(), ProtocolFactory::protocolToString(protocol_));
 		running_ = true;
 		ready_ = true;
 
@@ -902,23 +1158,31 @@ void MultiplexingServer::runServer()
 
 				if (fd == server_fd_)
 				{
-					handleNewConnection();
+					if (ProtocolFactory::isStreamProtocol(protocol_))
+					{
+						handleNewConnection();
+					}
+					else if (protocol_ == Protocol::UDP)
+					{
+						handleUdpDatagram();
+					}
 				}
 				else
 				{
 					handleClientEvent(fd, event_flags);
 				}
-				time_t now = time(nullptr);
-				if (now - last_health_check >= 5)
+			}
+
+			time_t now = time(nullptr);
+			if (now - last_health_check >= 5)
+			{
+				if (ProtocolFactory::isStreamProtocol(protocol_))
 				{
 					checkConnectionHealth();
 					cleanupInactiveClients();
-					last_health_check = now;
 				}
+				last_health_check = now;
 			}
-
-			// Clean up inactive clients
-			cleanupInactiveClients();
 		}
 
 		running_ = false;
@@ -933,8 +1197,70 @@ void MultiplexingServer::runServer()
 	}
 }
 
+void MultiplexingServer::handleUdpDatagram()
+{
+	struct sockaddr_in client_addr;
+	socklen_t client_len = sizeof(client_addr);
+
+	// Replace VLA with dynamic allocation
+	std::vector<char> buffer(config_.udp_max_datagram_size);
+
+	ssize_t bytes_received = recvfrom(server_fd_, buffer.data(), buffer.size() - 1, 0,
+									  (struct sockaddr *)&client_addr, &client_len);
+
+	if (bytes_received > 0)
+	{
+		buffer[bytes_received] = '\0';
+		std::string message(buffer.data(), bytes_received);
+
+		char client_ip[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+		std::string client_addr_str = std::string(client_ip) + ":" + std::to_string(ntohs(client_addr.sin_port));
+
+		Logger::debug("UDP datagram from {}: {} bytes", client_addr_str, bytes_received);
+
+		// Use thread pool for request processing
+		if (thread_pool_)
+		{
+			thread_pool_->enqueue([this, message = std::move(message), client_addr, client_addr_str]()
+								  {
+                try
+                {
+                    // Create or get UDP client connection
+                    std::shared_ptr<ClientConnection> client;
+                    {
+                        std::lock_guard<std::mutex> lock(udp_clients_mutex_);
+                        auto it = udp_clients_.find(client_addr_str);
+                        if (it == udp_clients_.end())
+                        {
+                            client = connection_pool_->acquire(server_fd_, client_addr_str, 
+                                                              request_handler_.get(), protocol_);
+                            udp_clients_[client_addr_str] = client;
+                        }
+                        else
+                        {
+                            client = it->second;
+                        }
+                    }
+
+                    client->processDatagram(message, &client_addr);
+                }
+                catch (const std::exception &e)
+                {
+                    Logger::error("Exception in UDP request processing for {}: {}", 
+                                 client_addr_str, e.what());
+                } });
+		}
+	}
+}
+
 void MultiplexingServer::handleNewConnection()
 {
+	if (!ProtocolFactory::isStreamProtocol(protocol_))
+	{
+		return;
+	}
+
 	struct sockaddr_in address;
 	socklen_t addrlen = sizeof(address);
 
@@ -955,8 +1281,10 @@ void MultiplexingServer::handleNewConnection()
 		inet_ntop(AF_INET, &address.sin_addr, client_addr, INET_ADDRSTRLEN);
 		std::string client_addr_str = std::string(client_addr) + ":" + std::to_string(ntohs(address.sin_port));
 
+		Logger::info("New HTTP client connected: {}", client_addr_str);
+
 		// Use connection pool to get client connection
-		auto client = connection_pool_->acquire(client_fd, client_addr_str, request_handler_.get());
+		auto client = connection_pool_->acquire(client_fd, client_addr_str, request_handler_.get(), protocol_);
 
 		{
 			std::lock_guard<std::mutex> lock(clients_mutex_);
@@ -964,13 +1292,16 @@ void MultiplexingServer::handleNewConnection()
 		}
 
 		// Add to epoll for read events initially
-		addToEpoll(client_fd, EPOLLIN | EPOLLRDHUP);
+		if (ProtocolFactory::isStreamProtocol(protocol_))
+		{
+			addToEpoll(client_fd, EPOLLIN | EPOLLRDHUP);
+		}
 
 		// Track connection metrics
 		auto &metrics = Metrics::getInstance();
 		metrics.incrementConnections();
 
-		Logger::debug("New client connected: {}", client_addr_str);
+		Logger::debug("Client {} added to epoll", client_addr_str);
 	}
 }
 
@@ -983,11 +1314,15 @@ void MultiplexingServer::handleClientEvent(int client_fd, uint32_t events)
 		if (it == clients_.end())
 		{
 			// Connection already closed - remove from epoll
+			Logger::debug("Client fd {} not found in clients map, removing from epoll", client_fd);
 			removeFromEpoll(client_fd);
 			return;
 		}
 		client = it->second;
 	}
+
+	Logger::debug("Client event: fd={}, events=0x{:x}, addr={}",
+				  client_fd, events, client->getClientAddress());
 
 	if (events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP))
 	{
@@ -999,8 +1334,10 @@ void MultiplexingServer::handleClientEvent(int client_fd, uint32_t events)
 	// Handle read events
 	if (events & EPOLLIN)
 	{
+		Logger::debug("Read event for client: {}", client->getClientAddress());
 		if (!client->readAvailable())
 		{
+			Logger::debug("readAvailable returned false, closing client: {}", client->getClientAddress());
 			closeClient(client_fd);
 			return;
 		}
@@ -1009,8 +1346,10 @@ void MultiplexingServer::handleClientEvent(int client_fd, uint32_t events)
 	// Handle write events
 	if (events & EPOLLOUT)
 	{
+		Logger::debug("Write event for client: {}", client->getClientAddress());
 		if (!client->writeAvailable())
 		{
+			Logger::debug("writeAvailable returned false, closing client: {}", client->getClientAddress());
 			closeClient(client_fd);
 			return;
 		}
@@ -1131,6 +1470,12 @@ void MultiplexingServer::cleanup()
 			removeFromEpoll(client_fd);
 		}
 		clients_.clear();
+	}
+
+	// Clean up UDP clients
+	{
+		std::lock_guard<std::mutex> lock(udp_clients_mutex_);
+		udp_clients_.clear();
 	}
 
 	// Clean up connection pool

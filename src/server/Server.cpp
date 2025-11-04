@@ -2,6 +2,14 @@
 #include <csignal>
 #include <chrono>
 #include <utility>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <fcntl.h>
+#ifdef HAS_SCTP
+#include <netinet/sctp.h>
+#endif
 
 #include <logging/Logger.h>
 #include <server/Metrics.h>
@@ -20,8 +28,8 @@ void Server::handleSignal(int signal)
 	}
 }
 
-Server::Server(std::string host, int port)
-	: host_(std::move(host)), port_(port)
+Server::Server(std::string host, int port, Protocol protocol)
+	: host_(std::move(host)), port_(port), protocol_(protocol)
 {
 	// Register for signal handling
 	global_instance_ = this;
@@ -38,6 +46,67 @@ Server::~Server()
 	{
 		global_instance_ = nullptr;
 	}
+}
+
+bool Server::createSocket()
+{
+	if (protocol_ == Protocol::HTTP)
+	{
+		// HTTP uses httplib, no raw socket needed
+		return true;
+	}
+
+	server_fd_ = socket(AF_INET,
+						ProtocolFactory::getSocketType(protocol_),
+						ProtocolFactory::getSocketProtocol(protocol_));
+
+	if (server_fd_ < 0)
+	{
+		Logger::error("Failed to create {} socket: {}",
+					  ProtocolFactory::protocolToString(protocol_),
+					  strerror(errno));
+		return false;
+	}
+
+	// Set socket options
+	int opt = 1;
+	if (setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
+	{
+		Logger::error("Failed to set SO_REUSEADDR: {}", strerror(errno));
+		// Continue anyway
+	}
+
+	// Bind socket
+	struct sockaddr_in address;
+	address.sin_family = AF_INET;
+	address.sin_addr.s_addr = INADDR_ANY;
+	address.sin_port = htons(port_);
+
+	if (bind(server_fd_, (struct sockaddr *)&address, sizeof(address)) < 0)
+	{
+		Logger::error("Failed to bind {} socket to port {}: {}",
+					  ProtocolFactory::protocolToString(protocol_),
+					  port_, strerror(errno));
+		close(server_fd_);
+		server_fd_ = -1;
+		return false;
+	}
+
+	// Listen for stream protocols
+	if (ProtocolFactory::isStreamProtocol(protocol_) && protocol_ != Protocol::HTTP)
+	{
+		if (listen(server_fd_, 1024) < 0)
+		{
+			Logger::error("Failed to listen on {} socket: {}",
+						  ProtocolFactory::protocolToString(protocol_),
+						  strerror(errno));
+			close(server_fd_);
+			server_fd_ = -1;
+			return false;
+		}
+	}
+
+	return true;
 }
 
 bool Server::start()
@@ -109,6 +178,13 @@ void Server::stop()
 		server_->stop();
 	}
 
+	// Close raw socket if used
+	if (server_fd_ >= 0)
+	{
+		close(server_fd_);
+		server_fd_ = -1;
+	}
+
 	// Wait for server thread to finish
 	if (server_thread_.joinable())
 	{
@@ -126,20 +202,49 @@ void Server::runServer()
 		running_ = true;
 		ready_ = true;
 
-		// Start listening - this blocks until server stops
-		const bool listen_success = server_->listen(host_.c_str(), port_);
-
-		// Server stopped listening
-		running_ = false;
-		ready_ = false;
-
-		if (listen_success)
+		if (protocol_ == Protocol::HTTP)
 		{
-			Logger::info("Server stopped listening (shutdown requested)");
+			// Start listening - this blocks until server stops
+			const bool listen_success = server_->listen(host_.c_str(), port_);
+
+			// Server stopped listening
+			running_ = false;
+			ready_ = false;
+
+			if (listen_success)
+			{
+				Logger::info("Server stopped listening (shutdown requested)");
+			}
+			else
+			{
+				Logger::error("Server failed to start listening on {}", getAddress());
+			}
 		}
 		else
 		{
-			Logger::error("Server failed to start listening on {}", getAddress());
+			// Handle raw protocols
+			Logger::info("Raw {} server running", ProtocolFactory::protocolToString(protocol_));
+
+			while (!shutdown_requested_)
+			{
+				if (protocol_ == Protocol::UDP)
+				{
+					handleUDPMessage();
+				}
+				else if (protocol_ == Protocol::SCTP)
+				{
+					handleSCTPMessage();
+				}
+				else if (protocol_ == Protocol::TCP)
+				{
+					handleRawTCPMessage();
+				}
+
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			}
+
+			running_ = false;
+			ready_ = false;
 		}
 	}
 	catch (const std::exception &e)
@@ -150,25 +255,131 @@ void Server::runServer()
 	}
 }
 
+void Server::handleUDPMessage()
+{
+	struct sockaddr_in client_addr;
+	socklen_t client_len = sizeof(client_addr);
+	char buffer[4096];
+
+	ssize_t bytes_received = recvfrom(server_fd_, buffer, sizeof(buffer) - 1, 0,
+									  (struct sockaddr *)&client_addr, &client_len);
+
+	if (bytes_received > 0)
+	{
+		buffer[bytes_received] = '\0';
+		std::string message(buffer, bytes_received);
+
+		char client_ip[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+
+		Logger::debug("UDP message from {}:{} - {} bytes",
+					  client_ip, ntohs(client_addr.sin_port), bytes_received);
+
+		// Process the message (simple echo for demonstration)
+		std::string response = "Echo: " + message;
+		sendto(server_fd_, response.c_str(), response.length(), 0,
+			   (struct sockaddr *)&client_addr, client_len);
+	}
+}
+
+void Server::handleSCTPMessage()
+{
+#ifdef HAS_SCTP
+	struct sockaddr_in client_addr;
+	socklen_t client_len = sizeof(client_addr);
+	char buffer[4096];
+
+	ssize_t bytes_received = sctp_recvmsg(server_fd_, buffer, sizeof(buffer) - 1,
+										  (struct sockaddr *)&client_addr, &client_len,
+										  NULL, 0, NULL, NULL);
+
+	if (bytes_received > 0)
+	{
+		buffer[bytes_received] = '\0';
+		std::string message(buffer, bytes_received);
+
+		char client_ip[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+
+		Logger::debug("SCTP message from {}:{} - {} bytes",
+					  client_ip, ntohs(client_addr.sin_port), bytes_received);
+
+		// Process the message (simple echo for demonstration)
+		std::string response = "Echo: " + message;
+		sctp_sendmsg(server_fd_, response.c_str(), response.length(),
+					 (struct sockaddr *)&client_addr, client_len,
+					 0, 0, 0, 0, 0);
+	}
+#else
+	Logger::warn("SCTP support not compiled in");
+	std::this_thread::sleep_for(std::chrono::seconds(1));
+#endif
+}
+
+void Server::handleRawTCPMessage()
+{
+	struct sockaddr_in client_addr;
+	socklen_t client_len = sizeof(client_addr);
+	int client_fd = accept(server_fd_, (struct sockaddr *)&client_addr, &client_len);
+
+	if (client_fd >= 0)
+	{
+		char client_ip[INET_ADDRSTRLEN];
+		inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+		Logger::debug("TCP connection from {}:{}", client_ip, ntohs(client_addr.sin_port));
+
+		char buffer[4096];
+		ssize_t bytes_received = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
+
+		if (bytes_received > 0)
+		{
+			buffer[bytes_received] = '\0';
+			std::string message(buffer, bytes_received);
+			Logger::debug("TCP message: {} bytes", bytes_received);
+
+			// Process the message (simple echo for demonstration)
+			std::string response = "Echo: " + message;
+			send(client_fd, response.c_str(), response.length(), 0);
+		}
+
+		close(client_fd);
+	}
+}
+
 void Server::initializeServer()
 {
 	Logger::initialize();
 
-	// Initialize components
-	request_handler_ = std::make_unique<RequestHandler>();
-	server_ = std::make_unique<httplib::Server>();
-
-	// Configure server
-	server_->new_task_queue = []
+	if (protocol_ == Protocol::HTTP)
 	{
-		return new httplib::ThreadPool(std::thread::hardware_concurrency());
-	};
+		// Initialize HTTP server components
+		request_handler_ = std::make_unique<RequestHandler>();
+		server_ = std::make_unique<httplib::Server>();
 
-	// Set timeouts
-	server_->set_read_timeout(30, 0);  // 30 seconds
-	server_->set_write_timeout(30, 0); // 30 seconds
+		// Configure server
+		server_->new_task_queue = []
+		{
+			return new httplib::ThreadPool(std::thread::hardware_concurrency());
+		};
 
-	setupRoutes();
+		// Set timeouts
+		server_->set_read_timeout(30, 0);  // 30 seconds
+		server_->set_write_timeout(30, 0); // 30 seconds
+
+		setupRoutes();
+	}
+	else
+	{
+		// Initialize raw protocol server
+		if (!createSocket())
+		{
+			throw std::runtime_error("Failed to create " +
+									 ProtocolFactory::protocolToString(protocol_) + " socket");
+		}
+
+		request_handler_ = std::make_unique<RequestHandler>();
+	}
+
 	shutdown_requested_ = false;
 }
 
@@ -186,6 +397,13 @@ void Server::cleanup()
 	if (server_)
 	{
 		server_.reset();
+	}
+
+	// Close socket if used
+	if (server_fd_ >= 0)
+	{
+		close(server_fd_);
+		server_fd_ = -1;
 	}
 
 	// Reset state flags
@@ -282,19 +500,19 @@ void Server::setupRoutes()
 				 {
         Logger::debug("Root endpoint request");
         res.set_content(R"({
-			"service": "C++ JSON Processing Service",
-			"version": "1.0.0",
-			"endpoints": {
-				"GET /": "API documentation",
-				"GET /health": "Service health check",
-				"GET /metrics": "Prometheus metrics", 
-				"GET /numbers/sum": "Get total sum of all processed numbers",
-				"GET /numbers/sum/{client_id}": "Get sum of numbers for specific client",
-				"GET /numbers/sum-all": "Get sums for all clients",
-				"POST /process": "Process JSON request synchronously",
-				"POST /process-async": "Process JSON request asynchronously"
-			}
-		})", "application/json"); });
+            "service": "C++ JSON Processing Service",
+            "version": "1.0.0",
+            "endpoints": {
+                "GET /": "API documentation",
+                "GET /health": "Service health check",
+                "GET /metrics": "Prometheus metrics", 
+                "GET /numbers/sum": "Get total sum of all processed numbers",
+                "GET /numbers/sum/{client_id}": "Get sum of numbers for specific client",
+                "GET /numbers/sum-all": "Get sums for all clients",
+                "POST /process": "Process JSON request synchronously",
+                "POST /process-async": "Process JSON request asynchronously"
+            }
+        })", "application/json"); });
 
 	// Synchronous processing endpoint - UPDATED with metrics
 	server_->Post("/process", [this](const httplib::Request &req, httplib::Response &res)

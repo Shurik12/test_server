@@ -16,19 +16,70 @@ RequestHandler::~RequestHandler()
 				 requests_processed_.load(), successful_requests_.load(), failed_requests_.load());
 }
 
+// In RequestHandler::parseJson method
 UserData RequestHandler::parseJson(const std::string &json_input)
 {
+	// Check for empty input first
+	if (json_input.empty())
+	{
+		Logger::error("Empty JSON input received");
+		throw std::runtime_error("Empty JSON input");
+	}
+
+	// Log the actual input for debugging (limit length to avoid huge logs)
+	std::string debug_input = json_input.substr(0, 200);
+	Logger::debug("Parsing JSON input (first 200 chars): '{}'", debug_input);
+
 	rapidjson::Document doc;
 	doc.Parse(json_input.c_str());
 
 	if (doc.HasParseError())
 	{
-		Logger::error("JSON parse error: {} at offset {}", doc.GetParseError(), doc.GetErrorOffset());
-		throw std::runtime_error("Invalid JSON format");
+		Logger::error("JSON parse error: {} at offset {}. Input: '{}'",
+					  doc.GetParseError(), doc.GetErrorOffset(), debug_input);
+
+		// Provide more specific error messages
+		switch (doc.GetParseError())
+		{
+		case rapidjson::kParseErrorDocumentEmpty:
+			throw std::runtime_error("Empty JSON document");
+		case rapidjson::kParseErrorDocumentRootNotSingular:
+			throw std::runtime_error("JSON root not singular");
+		case rapidjson::kParseErrorValueInvalid:
+			throw std::runtime_error("Invalid JSON value");
+		case rapidjson::kParseErrorObjectMissName:
+			throw std::runtime_error("Object missing name");
+		case rapidjson::kParseErrorObjectMissColon:
+			throw std::runtime_error("Object missing colon");
+		case rapidjson::kParseErrorObjectMissCommaOrCurlyBracket:
+			throw std::runtime_error("Object missing comma or closing brace");
+		case rapidjson::kParseErrorArrayMissCommaOrSquareBracket:
+			throw std::runtime_error("Array missing comma or closing bracket");
+		case rapidjson::kParseErrorStringUnicodeEscapeInvalidHex:
+			throw std::runtime_error("Invalid unicode escape in string");
+		case rapidjson::kParseErrorStringUnicodeSurrogateInvalid:
+			throw std::runtime_error("Invalid unicode surrogate");
+		case rapidjson::kParseErrorStringEscapeInvalid:
+			throw std::runtime_error("Invalid escape character in string");
+		case rapidjson::kParseErrorStringMissQuotationMark:
+			throw std::runtime_error("Missing quotation mark in string");
+		case rapidjson::kParseErrorStringInvalidEncoding:
+			throw std::runtime_error("Invalid string encoding");
+		case rapidjson::kParseErrorNumberTooBig:
+			throw std::runtime_error("Number too big");
+		case rapidjson::kParseErrorNumberMissFraction:
+			throw std::runtime_error("Number missing fraction");
+		case rapidjson::kParseErrorNumberMissExponent:
+			throw std::runtime_error("Number missing exponent");
+		default:
+			throw std::runtime_error("Invalid JSON format");
+		}
 	}
 
+	// Rest of your existing parsing code...
 	if (!doc.IsObject())
 	{
+		Logger::error("Input is not a JSON object: '{}'", debug_input);
 		throw std::runtime_error("Expected JSON object");
 	}
 
@@ -73,6 +124,9 @@ UserData RequestHandler::parseJson(const std::string &json_input)
 	{
 		throw std::runtime_error("Missing or invalid 'number' field");
 	}
+
+	Logger::debug("Successfully parsed JSON: id={}, name={}, phone={}, number={}",
+				  data.id, data.name, data.phone, data.number);
 
 	return data;
 }

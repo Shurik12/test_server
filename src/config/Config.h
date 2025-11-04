@@ -1,8 +1,11 @@
 #pragma once
 
 #include <string>
+#include <vector>
 #include <unordered_map>
 #include <memory>
+
+#include <server/Protocol.h>
 
 class Config
 {
@@ -14,6 +17,9 @@ public:
 	static bool getBool(const std::string &key, bool defaultValue = false);
 	static bool isLoaded() { return instance_ != nullptr; }
 	static std::string toString();
+	static std::vector<Protocol> getEnabledProtocols();
+	static bool isProtocolEnabled(Protocol protocol);
+	static bool isProtocolEnabled(const std::string &protocolName);
 
 private:
 	Config() = default;

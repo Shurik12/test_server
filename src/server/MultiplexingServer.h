@@ -3,6 +3,7 @@
 #include <server/IServer.h>
 #include <server/RequestHandler.h>
 #include <server/Metrics.h>
+#include <server/Protocol.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -20,10 +21,14 @@
 #include <condition_variable>
 #include <string_view>
 
+#ifdef HAS_SCTP
+#include <netinet/sctp.h>
+#endif
+
 class MultiplexingServer : public IServer
 {
 public:
-	MultiplexingServer(std::string host = "0.0.0.0", int port = 8080);
+	MultiplexingServer(std::string host = "0.0.0.0", int port = 8080, Protocol protocol = Protocol::TCP);
 	~MultiplexingServer();
 
 	// Delete copy operations
@@ -42,6 +47,9 @@ public:
 	int getPort() const noexcept override { return port_; }
 	std::string getAddress() const override { return host_ + ":" + std::to_string(port_); }
 	std::string getType() const override { return "multiplexing"; }
+	Protocol getProtocol() const override { return protocol_; }
+	void setProtocol(Protocol protocol) override { protocol_ = protocol; }
+
 	void checkConnectionHealth();
 
 private:
@@ -56,21 +64,24 @@ private:
 		bool enable_epollout_optimization = true;
 		size_t max_concurrent_connections = 10000;
 		int request_timeout = 10;
+		int udp_max_datagram_size = 65507;
 	};
 
 	class ClientConnection
 	{
 	public:
 		ClientConnection(int fd, const std::string &client_addr, RequestHandler *request_handler,
-						 const ServerConfig &config, MultiplexingServer *server);
+						 const ServerConfig &config, MultiplexingServer *server, Protocol protocol);
 		~ClientConnection();
 
 		int getFd() const { return fd_; }
 		const std::string &getClientAddress() const { return client_addr_; }
+		Protocol getProtocol() const { return protocol_; }
 
 		bool readAvailable();
 		bool writeAvailable();
-		void sendResponse(std::string response); // Changed to pass by value for move semantics
+		void sendResponse(std::string response);
+		void sendUdpResponse(const std::string &response, const sockaddr_in &client_addr);
 		void close();
 		bool isActive() const { return active_; }
 		time_t getLastActivity() const { return last_activity_; }
@@ -79,13 +90,16 @@ private:
 			std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(write_mutex_));
 			return !write_buffer_.empty();
 		}
-		void reset(int fd, const std::string &client_addr, RequestHandler *request_handler);
+		void processDatagram(const std::string &data, const sockaddr_in *client_addr = nullptr);
+		void reset(int fd, const std::string &client_addr, RequestHandler *request_handler, Protocol protocol);
 
 	private:
 		void processRequests();
+		void processCompleteHttpRequest(std::string complete_request);
 		std::string handleHttpRequest(const std::string &method,
 									  const std::string &path,
 									  const std::string &body);
+		std::string handleRawRequest(const std::string &data);
 		bool parseHttpRequest(const std::string &data, std::string &method,
 							  std::string &path, std::string &body,
 							  std::unordered_map<std::string, std::string> &headers);
@@ -101,21 +115,24 @@ private:
 		int fd_;
 		std::string client_addr_;
 		std::string read_buffer_;
-		mutable std::mutex write_mutex_; // Made mutable for const methods
+		mutable std::mutex write_mutex_;
 		std::string write_buffer_;
 		std::atomic<bool> active_{true};
 		time_t last_activity_;
 		time_t connection_start_time_;
 		RequestHandler *request_handler_;
 		const ServerConfig &config_;
-		MultiplexingServer *server_; // For epoll notifications
+		MultiplexingServer *server_;
+		Protocol protocol_;
+		sockaddr_in udp_client_addr_; // For UDP responses
+		bool has_udp_client_{false};
 	};
 
 	// Connection pool for reusing ClientConnection objects
 	class ConnectionPool
 	{
 	private:
-		std::vector<std::shared_ptr<ClientConnection>> pool_; // Changed to shared_ptr
+		std::vector<std::shared_ptr<ClientConnection>> pool_;
 		std::mutex pool_mutex_;
 		const ServerConfig &config_;
 		MultiplexingServer *server_;
@@ -124,24 +141,25 @@ private:
 		ConnectionPool(const ServerConfig &config, MultiplexingServer *server)
 			: config_(config), server_(server) {}
 
-		std::shared_ptr<ClientConnection> acquire(int fd, const std::string &addr, RequestHandler *handler)
+		std::shared_ptr<ClientConnection> acquire(int fd, const std::string &addr,
+												  RequestHandler *handler, Protocol protocol)
 		{
 			std::lock_guard<std::mutex> lock(pool_mutex_);
 			if (!pool_.empty())
 			{
 				auto conn = pool_.back();
 				pool_.pop_back();
-				conn->reset(fd, addr, handler);
+				conn->reset(fd, addr, handler, protocol);
 				return conn;
 			}
-			return std::make_shared<ClientConnection>(fd, addr, handler, config_, server_);
+			return std::make_shared<ClientConnection>(fd, addr, handler, config_, server_, protocol);
 		}
 
 		void release(std::shared_ptr<ClientConnection> conn)
 		{
 			std::lock_guard<std::mutex> lock(pool_mutex_);
 			if (pool_.size() < 100)
-			{ // Limit pool size
+			{
 				pool_.push_back(std::move(conn));
 			}
 		}
@@ -153,6 +171,7 @@ private:
 	bool createSocket();
 	void handleNewConnection();
 	void handleClientEvent(int client_fd, uint32_t events);
+	void handleUdpDatagram();
 	void closeClient(int client_fd);
 	void addToEpoll(int fd, uint32_t events);
 	void modifyEpoll(int fd, uint32_t events);
@@ -164,6 +183,7 @@ private:
 	// Server configuration
 	const std::string host_;
 	const int port_;
+	Protocol protocol_;
 	ServerConfig config_;
 
 	// Server state
@@ -181,6 +201,10 @@ private:
 	std::unordered_map<int, std::shared_ptr<ClientConnection>> clients_;
 	std::mutex clients_mutex_;
 	std::unique_ptr<ConnectionPool> connection_pool_;
+
+	// UDP-specific
+	std::unordered_map<std::string, std::shared_ptr<ClientConnection>> udp_clients_;
+	std::mutex udp_clients_mutex_;
 
 	class ThreadPool
 	{

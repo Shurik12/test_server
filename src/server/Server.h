@@ -8,11 +8,12 @@
 #include <common/httplib.h>
 #include <server/RequestHandler.h>
 #include <server/IServer.h>
+#include <server/Protocol.h>
 
 class Server : public IServer
 {
 public:
-	Server(std::string host = "0.0.0.0", int port = 8080);
+	Server(std::string host = "0.0.0.0", int port = 8080, Protocol protocol = Protocol::HTTP);
 	~Server();
 
 	// Delete copy operations
@@ -37,6 +38,8 @@ public:
 	int getPort() const noexcept override { return port_; }
 	std::string getAddress() const override { return host_ + ":" + std::to_string(port_); }
 	std::string getType() const override { return "blocking"; }
+	Protocol getProtocol() const override { return protocol_; }
+	void setProtocol(Protocol protocol) override { protocol_ = protocol; }
 
 private:
 	void setupRoutes();
@@ -44,6 +47,10 @@ private:
 	void initializeServer();
 	void cleanup();
 	bool waitForThreadStart(int timeout_ms = 2000);
+	bool createSocket();
+	void handleUDPMessage();
+	void handleSCTPMessage();
+	void handleRawTCPMessage();
 
 	// Signal handling
 	static void handleSignal(int signal);
@@ -51,6 +58,7 @@ private:
 	// Server configuration
 	const std::string host_;
 	const int port_;
+	Protocol protocol_;
 
 	// Server state
 	std::atomic<bool> running_{false};
@@ -61,6 +69,7 @@ private:
 	std::unique_ptr<httplib::Server> server_;
 	std::unique_ptr<RequestHandler> request_handler_;
 	std::thread server_thread_;
+	int server_fd_{-1};
 
 	// Signal handling - make it non-static instance pointer
 	static Server *global_instance_;

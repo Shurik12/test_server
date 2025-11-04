@@ -19,7 +19,7 @@
 class LoadBenchmark : public benchmark::Fixture
 {
 protected:
-    static constexpr int TEST_PORT = 8081;
+    static constexpr int TEST_PORT = 8080;
 
     void SetUp(const benchmark::State & /*state*/) override
     {

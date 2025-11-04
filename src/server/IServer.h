@@ -3,6 +3,7 @@
 #include <string>
 #include <atomic>
 #include <memory>
+#include <server/Protocol.h>
 
 class IServer
 {
@@ -21,4 +22,6 @@ public:
 	virtual std::string getAddress() const = 0;
 
 	virtual std::string getType() const = 0;
+	virtual Protocol getProtocol() const = 0;
+	virtual void setProtocol(Protocol protocol) = 0;
 };

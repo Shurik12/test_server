@@ -27,6 +27,13 @@ find_package(yaml-cpp REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(fmt REQUIRED)
 
+find_library(SCTP_LIBRARY NAMES sctp)
+if(SCTP_LIBRARY)
+    message(STATUS "Found SCTP library: ${SCTP_LIBRARY}")
+else()
+    message(WARNING "SCTP library not found, SCTP support will be disabled")
+endif()
+
 set(SRC_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/client
     ${CMAKE_CURRENT_SOURCE_DIR}/src/common
@@ -49,6 +56,7 @@ target_include_directories(server PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(server PRIVATE
     spdlog::spdlog
     fmt::fmt
+    ${SCTP_LIBRARY}
 )
 
 # Client executable
@@ -125,6 +133,8 @@ if(BUILD_TESTING)
             spdlog::spdlog
             fmt::fmt
             pthread
+            ${SCTP_LIBRARY}
+
         )
 
         target_compile_options(load_benchmark PRIVATE

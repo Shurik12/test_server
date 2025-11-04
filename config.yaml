@@ -1,17 +1,26 @@
+# Server configuration
 server:
   host: "0.0.0.0"
   port: 8080
-  type: "multiplexing" # blocking or multiplexing
+  type: "multiplexing"  # blocking or multiplexing
   timeouts:
     read: 30
     write: 30
   thread_pool_size: 0 # 0 = use hardware concurrency
 
+# Protocol configuration
+protocols:
+  tcp: false
+  udp: false
+  sctp: false
+  http: true
+
+# Logging configuration
 logging:
-  level: "debug" # trace, debug, info, warn, error, critical
+  level: "info"
   file: "logs/service.log"
   pattern: "[%Y-%m-%d %H:%M:%S.%e] [%l] [thread %t] %v"
-  flush_on: "debug" # Level at which to automatically flush
+  flush_on: "warn"
 
 client:
   timeouts:

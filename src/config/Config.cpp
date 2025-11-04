@@ -202,3 +202,67 @@ void Config::flattenMap(const std::string &prefix, const std::unordered_map<std:
 		instance_->config_[full_key] = value;
 	}
 }
+
+std::vector<Protocol> Config::getEnabledProtocols()
+{
+	if (!instance_)
+	{
+		return {Protocol::HTTP}; // Default to HTTP only
+	}
+
+	std::vector<Protocol> enabledProtocols;
+
+	// Check each protocol individually
+	if (getBool("protocols.tcp", false))
+	{
+		enabledProtocols.push_back(Protocol::TCP);
+	}
+	if (getBool("protocols.udp", false))
+	{
+		enabledProtocols.push_back(Protocol::UDP);
+	}
+	if (getBool("protocols.sctp", false))
+	{
+		enabledProtocols.push_back(Protocol::SCTP);
+	}
+	if (getBool("protocols.http", true)) // HTTP enabled by default
+	{
+		enabledProtocols.push_back(Protocol::HTTP);
+	}
+
+	// If none specified, default to HTTP
+	if (enabledProtocols.empty())
+	{
+		enabledProtocols.push_back(Protocol::HTTP);
+	}
+
+	return enabledProtocols;
+}
+
+bool Config::isProtocolEnabled(Protocol protocol)
+{
+	if (!instance_)
+	{
+		return protocol == Protocol::HTTP; // Default to HTTP only
+	}
+
+	switch (protocol)
+	{
+	case Protocol::TCP:
+		return getBool("protocols.tcp", false);
+	case Protocol::UDP:
+		return getBool("protocols.udp", false);
+	case Protocol::SCTP:
+		return getBool("protocols.sctp", false);
+	case Protocol::HTTP:
+		return getBool("protocols.http", true);
+	default:
+		return false;
+	}
+}
+
+bool Config::isProtocolEnabled(const std::string &protocolName)
+{
+	Protocol protocol = ProtocolFactory::stringToProtocol(protocolName);
+	return isProtocolEnabled(protocol);
+}
