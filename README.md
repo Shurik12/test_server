@@ -26,7 +26,12 @@ make docker-run
 make docker-down
 ```
 
-### Load tests
+### C++ benchmarks and tests
+```bash
+./build/load_benchmark --benchmark_min_time=5s
+```
+
+### Python Load tests
 ```bash
 python3 load_test.py --url http://localhost:8080 --test all
 python3 load_test.py --test heavy
@@ -34,8 +39,7 @@ python3 load_test.py --test spike
 python3 load_test.py --test numbers
 ```
 
-### 
-
+### Linux statistics
 ```bash
 # watch connections
 watch -n 1 'netstat -an | grep :8080 | awk '\''{print $6}'\'' | sort | uniq -c'
