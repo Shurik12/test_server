@@ -8,12 +8,20 @@ server:
     write: 30
   thread_pool_size: 0 # 0 = use hardware concurrency
 
-# Protocol configuration
+# Protocol-specific ports
 protocols:
-  tcp: false
-  udp: false
-  sctp: false
-  http: true
+  http:
+    enabled: true
+    port: 8080
+  tcp:
+    enabled: true  
+    port: 8081
+  udp:
+    enabled: true
+    port: 8082
+  sctp:
+    enabled: false
+    port: 8083
 
 # Logging configuration
 logging:
@@ -28,5 +36,5 @@ client:
     read: 30
 
 application:
-  name: "C++ JSON Processing Service"
+  name: "C++ Multi-Protocol Server"
   version: "1.0.0"

@@ -11,7 +11,6 @@
 #include <server/Metrics.h>
 #include <server/MultiplexingServer.h>
 
-// Initialize static member
 MultiplexingServer *MultiplexingServer::global_instance_ = nullptr;
 
 void MultiplexingServer::handleSignal(int signal)
@@ -133,9 +132,45 @@ bool MultiplexingServer::ClientConnection::readAvailable()
 		}
 		else if (protocol_ == Protocol::TCP)
 		{
-			// For raw TCP, process as datagram
-			processDatagram(read_buffer_);
-			read_buffer_.clear();
+			// For raw TCP, process complete messages
+			// Look for newline as message delimiter
+			size_t newline_pos = read_buffer_.find('\n');
+			if (newline_pos != std::string::npos)
+			{
+				std::string message = read_buffer_.substr(0, newline_pos);
+				if (!message.empty() && message.back() == '\r')
+				{
+					message.pop_back();
+				}
+
+				Logger::debug("TCP message received from {}: {} bytes", client_addr_, message.length());
+				processDatagram(message);
+				read_buffer_.erase(0, newline_pos + 1);
+
+				// After processing, if buffer is empty and we got a message, consider closing
+				if (read_buffer_.empty() && message.length() > 0)
+				{
+					// For simple request-response, close after processing
+					Logger::debug("TCP request processed, closing connection");
+					active_ = false;
+					return false;
+				}
+			}
+			// If no newline but we have data and client might be done, process it
+			else if (!read_buffer_.empty() && read_buffer_.length() <= 8192)
+			{
+				// Check if this looks like a complete JSON message
+				if (read_buffer_.find("}") != std::string::npos &&
+					read_buffer_.length() > 10) // basic completeness check
+				{
+					Logger::debug("Processing TCP buffer as complete message from {}: {} bytes",
+								  client_addr_, read_buffer_.length());
+					processDatagram(read_buffer_);
+					read_buffer_.clear();
+					active_ = false; // Close after processing
+					return false;
+				}
+			}
 		}
 		else
 		{
@@ -739,11 +774,66 @@ std::string MultiplexingServer::ClientConnection::handleRawRequest(const std::st
 
 	try
 	{
-		// For raw protocols, echo the data with protocol prefix
-		std::string response_content = "[" + ProtocolFactory::protocolToString(protocol_) +
-									   "] Echo: " + data;
+		// For raw protocols (TCP/UDP/SCTP), try to parse as JSON and process
+		std::string response_content;
 
-		metrics.incrementSuccessfulRequests();
+		try
+		{
+			// Try to parse the incoming data as JSON
+			UserData user_data = request_handler_->parseJson(data);
+
+			// Validate and process the data
+			if (request_handler_->validateUserData(user_data))
+			{
+				// Track the original number
+				int original_number = user_data.number;
+
+				// Perform calculation
+				user_data.number = request_handler_->increase(user_data.number);
+
+				// Update number tracking
+				std::string client_id = "user_" + std::to_string(user_data.id);
+				metrics.addToTotalNumbersSum(original_number);
+
+				// Generate JSON response
+				rapidjson::Document doc;
+				doc.SetObject();
+				rapidjson::Document::AllocatorType &allocator = doc.GetAllocator();
+
+				doc.AddMember("id", user_data.id, allocator);
+				doc.AddMember("name", rapidjson::Value(user_data.name.c_str(), allocator), allocator);
+				doc.AddMember("phone", rapidjson::Value(user_data.phone.c_str(), allocator), allocator);
+				doc.AddMember("number", user_data.number, allocator);
+				doc.AddMember("success", true, allocator);
+				doc.AddMember("protocol", rapidjson::Value(ProtocolFactory::protocolToString(protocol_).c_str(), allocator), allocator);
+
+				rapidjson::StringBuffer buffer;
+				rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+				doc.Accept(writer);
+
+				response_content = buffer.GetString();
+				metrics.incrementSuccessfulRequests();
+
+				Logger::info("{} request processed successfully for client {}: id={}, name={}, number={}->{}",
+							 ProtocolFactory::protocolToString(protocol_), client_addr_,
+							 user_data.id, user_data.name, original_number, user_data.number);
+			}
+			else
+			{
+				throw std::runtime_error("Invalid user data");
+			}
+		}
+		catch (const std::exception &json_error)
+		{
+			// If JSON parsing fails, fall back to echo mode
+			Logger::debug("JSON parsing failed for {} request from {}: {}, falling back to echo mode",
+						  ProtocolFactory::protocolToString(protocol_), client_addr_, json_error.what());
+
+			response_content = "[" + ProtocolFactory::protocolToString(protocol_) +
+							   "] Echo: " + data;
+			metrics.incrementSuccessfulRequests();
+		}
+
 		metrics.incrementBytesSent(response_content.size());
 
 		auto end_time = std::chrono::steady_clock::now();
@@ -757,7 +847,7 @@ std::string MultiplexingServer::ClientConnection::handleRawRequest(const std::st
 	catch (const std::exception &e)
 	{
 		metrics.incrementFailedRequests();
-		Logger::error("Raw request processing error: {}", e.what());
+		Logger::error("Raw request processing error from {}: {}", client_addr_, e.what());
 
 		auto end_time = std::chrono::steady_clock::now();
 		auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
@@ -890,43 +980,6 @@ std::string MultiplexingServer::ClientConnection::handleHttpRequest(const std::s
 	return createHttpResponse(error_json, "application/json", 404);
 }
 
-MultiplexingServer::ThreadPool::ThreadPool(size_t threads)
-{
-	for (size_t i = 0; i < threads; ++i)
-	{
-		workers_.emplace_back([this]
-							  {
-            while (true) {
-                std::function<void()> task;
-                {
-                    std::unique_lock<std::mutex> lock(queue_mutex_);
-                    condition_.wait(lock, [this] {
-                        return stop_ || !tasks_.empty();
-                    });
-                    
-                    if (stop_ && tasks_.empty()) return;
-                    
-                    task = std::move(tasks_.front());
-                    tasks_.pop();
-                }
-                task();
-            } });
-	}
-}
-
-MultiplexingServer::ThreadPool::~ThreadPool()
-{
-	stop_ = true;
-	condition_.notify_all();
-	for (std::thread &worker : workers_)
-	{
-		if (worker.joinable())
-		{
-			worker.join();
-		}
-	}
-}
-
 // MultiplexingServer implementation
 MultiplexingServer::MultiplexingServer(std::string host, int port, Protocol protocol)
 	: host_(std::move(host)), port_(port), protocol_(protocol), server_fd_(-1), epoll_fd_(-1)
@@ -940,9 +993,7 @@ MultiplexingServer::~MultiplexingServer()
 {
 	stop();
 	if (global_instance_ == this)
-	{
 		global_instance_ = nullptr;
-	}
 }
 
 bool MultiplexingServer::start()
@@ -1199,50 +1250,38 @@ void MultiplexingServer::runServer()
 
 void MultiplexingServer::handleUdpDatagram()
 {
-	struct sockaddr_in client_addr;
-	socklen_t client_len = sizeof(client_addr);
+    struct sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    std::vector<char> buffer(config_.udp_max_datagram_size);
 
-	// Replace VLA with dynamic allocation
-	std::vector<char> buffer(config_.udp_max_datagram_size);
+    ssize_t bytes_received = recvfrom(server_fd_, buffer.data(), buffer.size() - 1, 0,
+                                      (struct sockaddr *)&client_addr, &client_len);
 
-	ssize_t bytes_received = recvfrom(server_fd_, buffer.data(), buffer.size() - 1, 0,
-									  (struct sockaddr *)&client_addr, &client_len);
+    if (bytes_received > 0)
+    {
+        buffer[bytes_received] = '\0';
+        std::string message(buffer.data(), bytes_received);
 
-	if (bytes_received > 0)
-	{
-		buffer[bytes_received] = '\0';
-		std::string message(buffer.data(), bytes_received);
+        char client_ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
+        std::string client_addr_str = std::string(client_ip) + ":" + std::to_string(ntohs(client_addr.sin_port));
 
-		char client_ip[INET_ADDRSTRLEN];
-		inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
-		std::string client_addr_str = std::string(client_ip) + ":" + std::to_string(ntohs(client_addr.sin_port));
+        Logger::info("UDP datagram from {}: {} bytes - '{}'",
+                     client_addr_str, bytes_received,
+                     message.substr(0, std::min(message.length(), size_t(100))));
 
-		Logger::debug("UDP datagram from {}: {} bytes", client_addr_str, bytes_received);
-
-		// Use thread pool for request processing
-		if (thread_pool_)
-		{
-			thread_pool_->enqueue([this, message = std::move(message), client_addr, client_addr_str]()
-								  {
+        // Process immediately without storing client
+        if (thread_pool_)
+        {
+            thread_pool_->enqueue([this, message = std::move(message), client_addr, client_addr_str]()
+                                  {
                 try
                 {
-                    // Create or get UDP client connection
-                    std::shared_ptr<ClientConnection> client;
-                    {
-                        std::lock_guard<std::mutex> lock(udp_clients_mutex_);
-                        auto it = udp_clients_.find(client_addr_str);
-                        if (it == udp_clients_.end())
-                        {
-                            client = connection_pool_->acquire(server_fd_, client_addr_str, 
-                                                              request_handler_.get(), protocol_);
-                            udp_clients_[client_addr_str] = client;
-                        }
-                        else
-                        {
-                            client = it->second;
-                        }
-                    }
-
+                    // Create temporary client connection for processing
+                    auto client = std::make_shared<ClientConnection>(
+                        server_fd_, client_addr_str, request_handler_.get(), 
+                        config_, this, protocol_);
+                    
                     client->processDatagram(message, &client_addr);
                 }
                 catch (const std::exception &e)
@@ -1250,8 +1289,8 @@ void MultiplexingServer::handleUdpDatagram()
                     Logger::error("Exception in UDP request processing for {}: {}", 
                                  client_addr_str, e.what());
                 } });
-		}
-	}
+        }
+    }
 }
 
 void MultiplexingServer::handleNewConnection()
@@ -1281,7 +1320,9 @@ void MultiplexingServer::handleNewConnection()
 		inet_ntop(AF_INET, &address.sin_addr, client_addr, INET_ADDRSTRLEN);
 		std::string client_addr_str = std::string(client_addr) + ":" + std::to_string(ntohs(address.sin_port));
 
-		Logger::info("New HTTP client connected: {}", client_addr_str);
+		// Log connection for all protocols
+		Logger::info("New {} client connected: {}",
+					 ProtocolFactory::protocolToString(protocol_), client_addr_str);
 
 		// Use connection pool to get client connection
 		auto client = connection_pool_->acquire(client_fd, client_addr_str, request_handler_.get(), protocol_);
@@ -1472,12 +1513,6 @@ void MultiplexingServer::cleanup()
 		clients_.clear();
 	}
 
-	// Clean up UDP clients
-	{
-		std::lock_guard<std::mutex> lock(udp_clients_mutex_);
-		udp_clients_.clear();
-	}
-
 	// Clean up connection pool
 	connection_pool_.reset();
 
@@ -1562,5 +1597,42 @@ void MultiplexingServer::checkConnectionHealth()
 	if (!dead_connections.empty())
 	{
 		Logger::info("Health check removed {} connections", dead_connections.size());
+	}
+}
+
+MultiplexingServer::ThreadPool::ThreadPool(size_t threads)
+{
+	for (size_t i = 0; i < threads; ++i)
+	{
+		workers_.emplace_back([this]
+							  {
+            while (true) {
+                std::function<void()> task;
+                {
+                    std::unique_lock<std::mutex> lock(queue_mutex_);
+                    condition_.wait(lock, [this] {
+                        return stop_ || !tasks_.empty();
+                    });
+                    
+                    if (stop_ && tasks_.empty()) return;
+                    
+                    task = std::move(tasks_.front());
+                    tasks_.pop();
+                }
+                task();
+            } });
+	}
+}
+
+MultiplexingServer::ThreadPool::~ThreadPool()
+{
+	stop_ = true;
+	condition_.notify_all();
+	for (std::thread &worker : workers_)
+	{
+		if (worker.joinable())
+		{
+			worker.join();
+		}
 	}
 }

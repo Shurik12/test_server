@@ -165,6 +165,28 @@ private:
 		}
 	};
 
+	class ThreadPool
+	{
+	private:
+		std::vector<std::thread> workers_;
+		std::queue<std::function<void()>> tasks_;
+		mutable std::mutex queue_mutex_;
+		std::condition_variable condition_;
+		std::atomic<bool> stop_{false};
+
+	public:
+		explicit ThreadPool(size_t threads);
+		~ThreadPool();
+
+		template <class F>
+		void enqueue(F &&task);
+
+		size_t getQueueSize() const
+		{
+			std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(queue_mutex_));
+			return tasks_.size();
+		}
+	};
 	void runServer();
 	void initializeServer();
 	void cleanup();
@@ -202,33 +224,7 @@ private:
 	std::mutex clients_mutex_;
 	std::unique_ptr<ConnectionPool> connection_pool_;
 
-	// UDP-specific
-	std::unordered_map<std::string, std::shared_ptr<ClientConnection>> udp_clients_;
-	std::mutex udp_clients_mutex_;
-
-	class ThreadPool
-	{
-	private:
-		std::vector<std::thread> workers_;
-		std::queue<std::function<void()>> tasks_;
-		mutable std::mutex queue_mutex_;
-		std::condition_variable condition_;
-		std::atomic<bool> stop_{false};
-
-	public:
-		explicit ThreadPool(size_t threads);
-		~ThreadPool();
-
-		template <class F>
-		void enqueue(F &&task);
-
-		size_t getQueueSize() const
-		{
-			std::lock_guard<std::mutex> lock(const_cast<std::mutex &>(queue_mutex_));
-			return tasks_.size();
-		}
-	};
-
+	// Thread pool
 	std::unique_ptr<ThreadPool> thread_pool_;
 
 	static MultiplexingServer *global_instance_;

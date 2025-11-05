@@ -61,6 +61,11 @@ public:
 	// Reset statistics
 	void resetStatistics();
 
+	// Make these methods public so they can be used by MultiplexingServer
+	UserData parseJson(const std::string &json_input);
+	bool validateUserData(const UserData &data);
+	int increase(int number);
+
 private:
 	friend class RequestHandlerTest;
 
@@ -71,10 +76,7 @@ private:
 	std::unordered_map<std::string, long long> client_numbers_sum_;
 	std::mutex client_mutex_;
 
-	UserData parseJson(const std::string &json_input);
-	bool validateUserData(const UserData &data);
 	std::string generateJsonResponse(const UserData &data);
 	std::string generateErrorResponse(const std::string &error_message);
-	int increase(int number);
 	std::string processRequestInternal(const std::string &json_input);
 };

@@ -95,16 +95,16 @@ std::string Config::toString()
 
 bool Config::parseYAML(const std::string &filename)
 {
+	std::cout << "Loading config from: " << filename << std::endl;
+
 	std::ifstream file(filename);
 	if (!file.is_open())
 	{
-		std::cerr << "Warning: Could not open config file: " << filename << std::endl;
+		std::cerr << "ERROR: Could not open config file: " << filename << std::endl;
 		return false;
 	}
 
 	std::string line;
-	std::string current_section;
-
 	while (std::getline(file, line))
 	{
 		// Remove comments
@@ -121,21 +121,14 @@ bool Config::parseYAML(const std::string &filename)
 		if (line.empty())
 			continue;
 
-		// Check for section
-		if (line.back() == ':')
-		{
-			current_section = line.substr(0, line.length() - 1);
-			continue;
-		}
-
-		// Parse key-value pair
+		// Parse key-value pairs (simple approach)
 		size_t colon_pos = line.find(':');
 		if (colon_pos != std::string::npos)
 		{
 			std::string key = line.substr(0, colon_pos);
 			std::string value = line.substr(colon_pos + 1);
 
-			// Trim whitespace from key and value
+			// Trim key and value
 			key.erase(0, key.find_first_not_of(" \t"));
 			key.erase(key.find_last_not_of(" \t") + 1);
 			value.erase(0, value.find_first_not_of(" \t"));
@@ -147,13 +140,11 @@ bool Config::parseYAML(const std::string &filename)
 				value = value.substr(1, value.length() - 2);
 			}
 
-			// Build full key with section
-			std::string full_key = current_section.empty() ? key : current_section + "." + key;
-			instance_->config_[full_key] = value;
+			instance_->config_[key] = value;
+			std::cout << "Config: " << key << " = " << value << std::endl;
 		}
 	}
 
-	std::cout << "Configuration loaded from: " << filename << std::endl;
 	return true;
 }
 
@@ -183,86 +174,19 @@ void Config::parseArgs(int argc, char *argv[])
 		}
 		else if (i == 1 && arg.find('-') != 0)
 		{
-			// First argument without -- is host
-			instance_->config_["server.host"] = arg;
-		}
-		else if (i == 2 && arg.find('-') != 0)
-		{
-			// Second argument without -- is port
-			instance_->config_["server.port"] = arg;
+			// First argument without -- is config file
+			loadFromFile(arg);
 		}
 	}
 }
 
-void Config::flattenMap(const std::string &prefix, const std::unordered_map<std::string, std::string> &map)
+Protocol Config::getProtocol()
 {
-	for (const auto &[key, value] : map)
-	{
-		std::string full_key = prefix.empty() ? key : prefix + "." + key;
-		instance_->config_[full_key] = value;
-	}
+	std::string protocol_str = getString("protocol", "http");
+	return ProtocolFactory::stringToProtocol(protocol_str);
 }
 
-std::vector<Protocol> Config::getEnabledProtocols()
+int Config::getPort()
 {
-	if (!instance_)
-	{
-		return {Protocol::HTTP}; // Default to HTTP only
-	}
-
-	std::vector<Protocol> enabledProtocols;
-
-	// Check each protocol individually
-	if (getBool("protocols.tcp", false))
-	{
-		enabledProtocols.push_back(Protocol::TCP);
-	}
-	if (getBool("protocols.udp", false))
-	{
-		enabledProtocols.push_back(Protocol::UDP);
-	}
-	if (getBool("protocols.sctp", false))
-	{
-		enabledProtocols.push_back(Protocol::SCTP);
-	}
-	if (getBool("protocols.http", true)) // HTTP enabled by default
-	{
-		enabledProtocols.push_back(Protocol::HTTP);
-	}
-
-	// If none specified, default to HTTP
-	if (enabledProtocols.empty())
-	{
-		enabledProtocols.push_back(Protocol::HTTP);
-	}
-
-	return enabledProtocols;
-}
-
-bool Config::isProtocolEnabled(Protocol protocol)
-{
-	if (!instance_)
-	{
-		return protocol == Protocol::HTTP; // Default to HTTP only
-	}
-
-	switch (protocol)
-	{
-	case Protocol::TCP:
-		return getBool("protocols.tcp", false);
-	case Protocol::UDP:
-		return getBool("protocols.udp", false);
-	case Protocol::SCTP:
-		return getBool("protocols.sctp", false);
-	case Protocol::HTTP:
-		return getBool("protocols.http", true);
-	default:
-		return false;
-	}
-}
-
-bool Config::isProtocolEnabled(const std::string &protocolName)
-{
-	Protocol protocol = ProtocolFactory::stringToProtocol(protocolName);
-	return isProtocolEnabled(protocol);
+	return getInt("port", 8080);
 }
