@@ -21,6 +21,15 @@ struct UserData
 		: id(id), name(std::move(name)), phone(std::move(phone)), number(number) {}
 };
 
+struct DocumentData
+{
+	std::string Url;		 // URL документа, его уникальный идентификатор
+	uint64_t PubDate;		 // время заявляемой публикации документа
+	uint64_t FetchTime;		 // время получения данного обновления документа, может рассматриваться как идентификатор версии. Пара (Url, FetchTime) уникальна.
+	std::string Text;		 // текст документа
+	uint64_t FirstFetchTime; // изначально отсутствует, необходимо заполнить
+};
+
 class RequestHandler
 {
 public:
@@ -71,10 +80,14 @@ private:
 	std::unordered_map<std::string, long long> client_numbers_sum_;
 	std::mutex client_mutex_;
 
+	std::unordered_map<std::string, std::atomic<std::shared_ptr<DocumentData>>> document_data_cache_;
+
 	UserData parseJson(const std::string &json_input);
 	bool validateUserData(const UserData &data);
 	std::string generateJsonResponse(const UserData &data);
 	std::string generateErrorResponse(const std::string &error_message);
 	int increase(int number);
+	std::shared_ptr<DocumentData> Process(std::shared_ptr<DocumentData> input);
 	std::string processRequestInternal(const std::string &json_input);
+	size_t max_document_data_cache_size_ = 1000;
 };

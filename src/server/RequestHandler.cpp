@@ -222,3 +222,56 @@ void RequestHandler::resetStatistics()
 	failed_requests_ = 0;
 	Logger::info("Statistics reset");
 }
+
+std::shared_ptr<DocumentData> RequestHandler::Process(std::shared_ptr<DocumentData> input)
+{
+	std::shared_ptr<DocumentData> correct_doc;
+	std::shared_ptr<DocumentData> from_db_element;
+	if (auto search = document_data_cache_.find(input->Url); search != document_data_cache_.end())
+	{
+		correct_doc = search->second;
+		if (input->FetchTime <= correct_doc->FetchTime)
+		{
+			correct_doc->PubDate = input->PubDate;
+			input->Text = correct_doc->Text;
+			correct_doc->FirstFetchTime = input->FetchTime;
+			input->FetchTime = correct_doc->FetchTime;
+		}
+		else
+		{
+			input->PubDate = correct_doc->PubDate;
+			correct_doc->Text = input->Text;
+			correct_doc->FetchTime = input->FetchTime;
+		}
+	}
+	else if (from_db_element = search_in_db(input) != nullptr)
+	{
+		correct_doc = from_db_element;
+		if (input->FetchTime <= correct_doc->FetchTime)
+		{
+			correct_doc->PubDate = input->PubDate;
+			input->Text = correct_doc->Text;
+			correct_doc->FirstFetchTime = input->FetchTime;
+			input->FetchTime = correct_doc->FetchTime;
+		}
+		else
+		{
+			input->PubDate = correct_doc->PubDate;
+			correct_doc->Text = input->Text;
+			correct_doc->FetchTime = input->FetchTime;
+		}
+		add_to_update_to_db(correct_doc);
+	}
+	else
+	{
+		input->FirstFetchTime = input->FetchTime;
+		if (document_data_cache_.size() >= max_document_data_cache_size_)
+		{
+			add_to_write_to_db(input);
+		}
+		else 
+		{
+			document_data_cache_[input->Url] = input;
+		}
+	}
+}
